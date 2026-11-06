@@ -201,13 +201,13 @@ function schedule() {
           return btn(`<strong>${patientName(s.patientId)}</strong><small>${label}</small><small>${statusLabel[s.status]}</small>`,
             'session', s.id, 'session');
         }).join('');
-        return `<div class="time"><span>${time}</span>${cards}${starts.includes(time) && !sessions.some(s => blocksTime(s) && overlaps(s.at, date + 'T' + time)) ?
+        return `<div class="time"><span>${time}</span>${cards}${starts.includes(time) && !data.sessions.some(s => blocksTime(s) && overlaps(s, { at: date + 'T' + time })) ?
           btn('Livre', 'book', date + 'T' + time, 'free') : ''}</div>`;
       }).join('') || '<p class="empty">Sem horários</p>'}</section>`;
   }).join('');
   return `<div class="toolbar">${btn('← Semana anterior', 'week', '-7')}${btn('Hoje', 'week', '0')}
     ${btn('Próxima semana →', 'week', '7')}<span class="spacer"></span>
-    ${btn('Disponibilidade', 'hours')}${btn('+ Nova sessão', 'book', '', 'primary')}</div>
+    ${btn('Disponibilidade', 'hours')}${btn('Sincronizar Google', 'google')}${btn('+ Nova sessão', 'book', '', 'primary')}</div>
     <div class="week">${days}</div>`;
 }
 
@@ -311,7 +311,7 @@ function indicators(entries) {
   const days = Array.from({ length: new Date(year, number, 0).getDate() }, (_, index) => shift(month + '-01', index));
   const available = days.flatMap(day => slotStarts(day).map(time => day + 'T' + time));
   const occupied = selectedSessions.filter(blocksTime);
-  const occupancy = available.length ? Math.round(100 * available.filter(slot => occupied.some(s => overlaps(s.at, slot))).length / available.length) + '%' : 'A definir';
+  const occupancy = available.length ? Math.round(100 * available.filter(slot => occupied.some(s => overlaps(s, { at: slot }))).length / available.length) + '%' : 'A definir';
   return `<div class="toolbar"><label>Mês de referência <input type="month" id="report-month" value="${month}"></label></div>
     <div class="metrics">${metric('Recebido no mês', money(received))}${metric('Gerado no mês', money(generated))}
       ${metric('Saldo em aberto · todos os meses', money(open))}${metric('Ocupação · horários atuais', occupancy)}
@@ -437,7 +437,97 @@ const localStamp = () => {
   return today() + 'T' + now.toTimeString().slice(0, 5);
 };
 const blocksTime = session => ['agendada', 'realizada', 'perdida', 'decidir'].includes(session.status);
-const overlaps = (a, b) => Math.abs(new Date(a) - new Date(b)) < 3600000;
+function overlaps(a, b) {
+  const first = Date.parse(a.at + 'Z');
+  const second = Date.parse(b.at + 'Z');
+  return first < second + (b.duration ?? 60) * 60000 && second < first + (a.duration ?? 60) * 60000;
+}
+
+function googleDialog() {
+  if (!cloudMode) {
+    dialog('Sincronizar Google Calendário',
+      '<p>A conexão com o Google fica disponível na versão com login, em um endereço autorizado no Google Cloud. A prévia local usa dados fictícios.</p>',
+      () => $('#dialog').close(), 'Fechar');
+    return;
+  }
+  if (!data.patients.some(p => p.active)) throw new Error('Cadastre ao menos um paciente ativo antes de importar.');
+  const configKey = 'agenda-vitoria-google-client-id';
+  dialog('Sincronizar Google Calendário', `
+    <p>Escolha o período do calendário principal da Vitória. Depois, selecione quais eventos são atendimentos.</p>
+    <label>De<input name="start" type="date" value="${shift(today(), -30)}" required></label>
+    <label>Até<input name="end" type="date" value="${shift(today(), 60)}" required></label>
+    <details ${localStorage.getItem(configKey) ? '' : 'open'}>
+      <summary>Configuração da conexão</summary>
+      <label>ID do cliente OAuth do Google<input name="client" value="${esc(localStorage.getItem(configKey))}" placeholder="…apps.googleusercontent.com" required></label>
+    </details>
+    <p class="hint">O Google será consultado em modo de leitura.</p>`, async form => {
+    const client = formValue(form, 'client').trim();
+    const start = formValue(form, 'start');
+    const end = formValue(form, 'end');
+    if (!/^[\w-]+\.apps\.googleusercontent\.com$/.test(client)) throw new Error('Informe um ID de cliente OAuth válido.');
+    if (start > end || end > shift(start, 366)) throw new Error('Escolha um intervalo de até um ano.');
+    const submit = form.querySelector('button.primary');
+    if (submit.disabled) return;
+    submit.disabled = true;
+    try {
+      const token = await GoogleAgenda.authorize(client);
+      const events = await GoogleAgenda.events(token, start, shift(end, 1));
+      if (!form.isConnected || !$('#dialog').open || !signedIn) return;
+      localStorage.setItem(configKey, client);
+      reviewGoogle(events);
+    } finally { submit.disabled = false; }
+  }, 'Conectar e buscar eventos');
+  const form = $('#dialog form');
+  const submit = form.querySelector('button.primary');
+  submit.disabled = true;
+  GoogleAgenda.prepare().then(() => { submit.disabled = false; })
+    .catch(error => { form.querySelector('.error').textContent = error.message; });
+}
+
+function reviewGoogle(events) {
+  const people = data.patients.filter(p => p.active);
+  const known = new Map(data.sessions.filter(s => s.googleRef).map(s => [s.googleRef, s]));
+  const candidates = events.filter(event => {
+    const existing = known.get(event.ref);
+    return !existing || existing.status === 'agendada' && (existing.at !== event.at || existing.duration !== event.duration);
+  });
+  const rows = candidates.map((event, index) => {
+    const existing = known.get(event.ref);
+    const choices = existing ? people.filter(p => p.id === existing.patientId) : people;
+    return `<label class="record"><span><strong>${esc(event.title)}</strong> · ${dayLabel(event.at.slice(0, 10))}
+      às ${event.at.slice(11)} · ${event.duration} min</span>
+      <select name="event-${index}">${option('', 'Ignorar evento')}
+      ${choices.map(p => option(p.id, existing ? 'Atualizar horário de ' + p.name : 'Importar para ' + p.name)).join('')}
+      </select></label>`;
+  }).join('');
+  dialog('Revisar eventos do Google', `
+    <p>Vincule apenas os atendimentos. Sessões importadas ficam agendadas, sem registrar pagamento ou presença.</p>
+    ${rows || '<p>Nenhum evento novo ou horário alterado neste período.</p>'}`, form => {
+    if (!candidates.length) { $('#dialog').close(); return; }
+    const selected = candidates.map((event, index) => ({ event, person: patient(formValue(form, 'event-' + index)) }))
+      .filter(item => item.person?.active);
+    if (!selected.length) throw new Error('Selecione ao menos um evento para importar ou atualizar.');
+    change(next => {
+      const refs = new Set(selected.map(item => item.event.ref));
+      const occupied = next.sessions.filter(s => blocksTime(s) && !refs.has(s.googleRef));
+      for (const { event, person } of selected) {
+        const existing = next.sessions.find(s => s.googleRef === event.ref);
+        if (existing && (existing.status !== 'agendada' || existing.patientId !== person.id)) {
+          throw new Error('Uma sessão já mudou na Agenda Vitória. Atualize a página e tente novamente.');
+        }
+        if (occupied.some(s => overlaps(s, event))) {
+          throw new Error('Conflito de horário em ' + dayLabel(event.at.slice(0, 10)) + ' às ' + event.at.slice(11) + '. Confira a agenda ou ignore esse evento.');
+        }
+        const slot = { at: event.at, duration: event.duration };
+        if (existing) Object.assign(existing, slot);
+        else next.sessions.push({ ...slot, id: id(), patientId: person.id, mode: person.mode,
+          amount: person.amount, status: 'agendada', googleRef: event.ref });
+        occupied.push(slot);
+      }
+      preservePayments(data, next);
+    }, selected.length + ' atendimento(s) importado(s) ou atualizado(s).');
+  }, candidates.length ? 'Salvar selecionados' : 'Fechar');
+}
 
 function patientDialog(existing) {
   dialog(existing ? 'Editar paciente' : 'Novo paciente', `
@@ -477,12 +567,13 @@ function bookDialog(at, existing) {
       '<label>Paciente<select name="patient">' + people.map(p => option(p.id, p.name)).join('') + '</select></label>'}
     <label>Data e horário<input type="datetime-local" name="at" value="${at || localStamp()}" required></label>
     ${existing ? '' : '<label>Repetir por quantas semanas?<input name="weeks" type="number" min="1" max="52" value="1" required></label>'}
-    <p class="hint">Cada sessão reserva uma hora.</p>`, form => {
+    <p class="hint">Esta sessão reserva ${existing?.duration ?? 60} minutos.</p>`, form => {
     const time = formValue(form, 'at');
     const number = existing ? 1 : Number(formValue(form, 'weeks'));
     const person = patient(existing?.patientId ?? formValue(form, 'patient'));
     const times = Array.from({ length: number }, (_, index) => shift(time.slice(0, 10), index * 7) + time.slice(10));
-    if (times.some(start => data.sessions.some(s => s.id !== existing?.id && blocksTime(s) && overlaps(start, s.at)))) {
+    if (times.some(start => data.sessions.some(s => s.id !== existing?.id && blocksTime(s) &&
+      overlaps({ at: start, duration: existing?.duration }, s)))) {
       throw new Error('Um dos horários se sobrepõe a outra sessão.');
     }
     change(next => {
@@ -540,7 +631,7 @@ function sessionDialog(session) {
     btn('Preservar para remarcação', 'preserve', session.id)
   ] : session.status === 'remarcar' && active ? [btn('Escolher novo horário', 'rebook', session.id, 'primary')] : [];
   dialog('Atendimento', `<p><strong>${patientName(session.patientId)}</strong> · ${modes[session.mode]}</p>
-    <p>${dayLabel(session.at.slice(0, 10))} às ${session.at.slice(11)} · ${statusLabel[session.status]}</p>
+    <p>${dayLabel(session.at.slice(0, 10))} às ${session.at.slice(11)} · ${session.duration ?? 60} min · ${statusLabel[session.status]}</p>
     <div class="actions">${actions.join('')}${btn('Editar sessão', 'edit-session', session.id)}
     ${btn('Excluir sessão', 'delete-session', session.id, 'danger')}</div>`, () => $('#dialog').close(), 'Fechar');
   $('#dialog form button[type="button"][data-action="close-dialog"]').hidden = true;
@@ -607,7 +698,7 @@ function editSession(session) {
     if (status !== 'agendada' && status !== 'cancelada' && status !== 'remarcar' && updated.at > localStamp()) {
       throw new Error('A sessão ainda não começou.');
     }
-    if (blocksTime(updated) && data.sessions.some(s => s.id !== session.id && blocksTime(s) && overlaps(s.at, updated.at))) {
+    if (blocksTime(updated) && data.sessions.some(s => s.id !== session.id && blocksTime(s) && overlaps(s, updated))) {
       throw new Error('O horário se sobrepõe a outra sessão.');
     }
     updateSession(session, updated, 'Sessão atualizada.');
@@ -681,6 +772,7 @@ function handle(action, value) {
       $('#title').focus();
       break;
     case 'hours': hoursDialog(); break;
+    case 'google': googleDialog(); break;
     case 'book': bookDialog(value); break;
     case 'rebook': bookDialog(session.at, session); break;
     case 'patient': patientDialog(patient(value)); break;

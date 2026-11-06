@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://xuuxfguvgkcpxidxrqjw.supabase.co; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; connect-src 'self' https://xuuxfguvgkcpxidxrqjw.supabase.co https://accounts.google.com/gsi/ https://www.googleapis.com; frame-src https://accounts.google.com/gsi/; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="theme-color" content="#2d4a32">
 <link rel="manifest" href="manifest.webmanifest">
 <title>Agenda · Vitória Farias</title>
 <link rel="stylesheet" href="estilo.css">
 <script defer src="modelo.js"></script>
 <script defer src="nuvem.js"></script>
+<script defer src="google-agenda.js"></script>
 <script defer src="app.js"></script>
 </head>
 <body>

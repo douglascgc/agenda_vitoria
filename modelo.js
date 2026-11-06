@@ -112,6 +112,8 @@
       list(value.patients, p => id(p.id) && typeof p.name === 'string' && typeof p.contact === 'string' &&
         typeof p.active === 'boolean' && mode(p.mode) && amount(p.amount)) &&
       list(value.sessions, s => id(s.id) && id(s.patientId) && stamp(s.at) && mode(s.mode) && amount(s.amount) &&
+        (s.duration === undefined || Number.isSafeInteger(s.duration) && s.duration > 0) &&
+        (s.googleRef === undefined || typeof s.googleRef === 'string') &&
         ['agendada', 'realizada', 'perdida', 'cancelada', 'decidir', 'remarcar'].includes(s.status)) &&
       list(value.hours, h => Number.isInteger(h.day) && h.day >= 0 && h.day < 7 && time(h.start) && time(h.end)) &&
       list(value.payments, p => typeof p.chargeId === 'string' && mode(p.mode) && amount(p.amount) && date(p.date)) &&

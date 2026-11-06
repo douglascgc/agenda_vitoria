@@ -20,6 +20,12 @@ Abrir `index.html` diretamente mantém o modo local, com os registros no navegad
 
 Execute `node scripts/build-site.mjs` para preparar a pasta `dist`. Em uma hospedagem estática com HTTPS, configure esse comando e use `dist` como diretório de publicação. No Cloudflare Pages, conecte a branch `main` do GitHub, sem preset de framework.
 
+## Google Calendário
+
+No Google Cloud, habilite a **Google Calendar API**, configure a tela de consentimento e crie um cliente OAuth do tipo **Aplicativo da Web**. Em **Origens JavaScript autorizadas**, adicione a origem HTTPS em que o app for publicado, ou `http://localhost:8000` para desenvolvimento. Enquanto o app estiver no modo de teste do Google, adicione a conta da Vitória como usuária de teste. O escopo solicitado é `calendar.events.owned.readonly`.
+
+Na Agenda, abra **Sincronizar Google**, informe o ID público do cliente OAuth e escolha o período. A Vitória autoriza a leitura da conta dela e seleciona quais eventos quer importar ou atualizar. A integração lê o calendário principal. Preserva a data, o horário e a duração, expande eventos recorrentes e verifica conflitos. O token fica em memória durante a consulta e títulos do Google só aparecem na revisão. O app não modifica o Google, não aplica cancelamentos automaticamente e não registra presença nem recebimentos durante a importação.
+
 ## Fluxos
 
 - **Agenda**. Disponibilidade semanal, sessões de uma hora, repetição semanal, remarcação, cancelamento e falta. Horários sobrepostos são bloqueados.
