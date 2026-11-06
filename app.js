@@ -261,37 +261,73 @@ function finance(entries) {
     }).join('') || '<p>Nenhum recebimento registrado.</p>'}`;
 }
 
+function timeline(title, description, months, series, format, breakdown = []) {
+  const plot = { left: 108, right: 790, top: 20, bottom: 201 };
+  const maximum = Math.max(0, ...series.flatMap(line => line.values));
+  const unit = format === money ? 100 : 1;
+  const quarter = unit * Math.max(1, Math.ceil(maximum / (4 * unit)));
+  const x = index => plot.left + (plot.right - plot.left) * index / (months.length - 1);
+  const y = value => plot.bottom - (plot.bottom - plot.top) * value / (quarter * 4);
+  const shortMonth = value => value.slice(5) + '/' + value.slice(2, 4);
+  const grid = [0, 1, 2, 3, 4].map(tick => {
+    const value = tick * quarter;
+    return `<line class="chart-grid" x1="${plot.left}" x2="${plot.right}" y1="${y(value)}" y2="${y(value)}"/>
+      <text x="${plot.left - 9}" y="${y(value) + 4}" text-anchor="end">${format(value)}</text>`;
+  }).join('');
+  const lines = series.map((line, index) => `<g class="chart-series series-${index}">
+    <polyline points="${line.values.map((value, i) => x(i) + ',' + y(value)).join(' ')}"/>
+    ${line.values.map((value, i) => `<circle cx="${x(i)}" cy="${y(value)}" r="4">
+      <title>${monthLabel(months[i])} · ${line.label} · ${format(value)}</title></circle>`).join('')}</g>`).join('');
+  const columns = [...series, ...breakdown];
+  return `<section class="timeline"><h2>${title}</h2><p>${description}</p>
+    ${series.length > 1 ? `<ul class="chart-legend">${series.map((line, index) =>
+      `<li class="series-${index}">${line.label}</li>`).join('')}</ul>` : ''}
+    <div class="chart-scroll"><svg viewBox="0 0 820 238" role="img" aria-label="${title}. Valores na tabela abaixo.">
+      ${grid}${lines}
+      ${months.map((value, i) => `<text x="${x(i)}" y="224" text-anchor="middle">${shortMonth(value)}</text>`).join('')}
+    </svg></div>
+    <details><summary>Ver valores por mês</summary>
+      <table class="chart-values"><thead><tr><th scope="col">Mês</th>${columns.map(line => `<th scope="col">${line.label}</th>`).join('')}</tr></thead>
+      <tbody>${months.map((value, i) => `<tr><th scope="row">${monthLabel(value)}</th>
+        ${columns.map(line => `<td>${format(line.values[i])}</td>`).join('')}</tr>`).join('')}</tbody></table>
+    </details></section>`;
+}
+
 function indicators(entries) {
-  const months = [...new Set([month, ...data.payments.map(p => p.date.slice(0, 7))])].sort().reverse().slice(0, 12);
+  const [year, number] = month.split('-').map(Number);
+  const months = Array.from({ length: 12 }, (_, index) => iso(new Date(year, number - 12 + index, 1)).slice(0, 7));
+  const reportable = entries.filter(e => e.mode !== 'ciclo' || e.consumed > 0 || e.paid > 0);
+  const generatedFor = value => sum(reportable.filter(e => e.month === value), e => e.amount);
+  const receivedFor = (value, include = () => true) =>
+    sum(data.payments.filter(p => p.date.startsWith(value) && include(p)), p => p.amount);
+  const patientsFor = value => new Set(data.sessions.filter(s => s.status === 'realizada' && s.at.startsWith(value))
+    .map(s => s.patientId)).size;
   const selectedPayments = data.payments.filter(p => p.date.startsWith(month));
   const selectedSessions = data.sessions.filter(s => s.at.startsWith(month));
-  const selectedCharges = entries.filter(e => e.month === month);
   const received = sum(selectedPayments, p => p.amount);
-  const generated = sum(selectedCharges.filter(e => e.mode !== 'ciclo' || e.consumed > 0 || e.paid > 0), e => e.amount);
+  const generated = generatedFor(month);
   const open = sum(entries, e => e.balance);
   const metric = (label, value) => `<article class="metric"><span>${label}</span><strong>${value}</strong></article>`;
-  const [year, number] = month.split('-').map(Number);
   const days = Array.from({ length: new Date(year, number, 0).getDate() }, (_, index) => shift(month + '-01', index));
   const available = days.flatMap(day => slotStarts(day).map(time => day + 'T' + time));
   const occupied = selectedSessions.filter(blocksTime);
   const occupancy = available.length ? Math.round(100 * available.filter(slot => occupied.some(s => overlaps(s.at, slot))).length / available.length) + '%' : 'A definir';
-  const max = Math.max(1, ...months.map(value => sum(data.payments.filter(p => p.date.startsWith(value)), p => p.amount)));
   return `<div class="toolbar"><label>Mês de referência <input type="month" id="report-month" value="${month}"></label></div>
     <div class="metrics">${metric('Recebido no mês', money(received))}${metric('Gerado no mês', money(generated))}
       ${metric('Saldo em aberto · todos os meses', money(open))}${metric('Ocupação · horários atuais', occupancy)}
       ${metric('Realizadas', selectedSessions.filter(s => s.status === 'realizada').length)}
       ${metric('Faltas registradas', selectedSessions.filter(s => s.absent).length + (data.absences ?? []).filter(a => (a.at ?? a).startsWith(month)).length)}
       ${metric('Canceladas ou em remarcação', selectedSessions.filter(s => ['cancelada', 'remarcar'].includes(s.status)).length)}</div>
-    <h2 class="section-title">Recebido por mês</h2>
-    ${months.map(value => {
-      const payments = data.payments.filter(p => p.date.startsWith(value));
-      const particular = sum(payments.filter(p => p.mode !== 'conexa'), p => p.amount);
-      const conexa = sum(payments.filter(p => p.mode === 'conexa'), p => p.amount);
-      return `<article class="record trend"><div><strong>${monthLabel(value)}</strong>
-        <p>Particular ${money(particular)} · Conexa ${money(conexa)}</p></div>
-        <div class="bar" aria-hidden="true"><span style="width:${100 * particular / max}%"></span><span style="width:${100 * conexa / max}%"></span></div>
-        <strong>${money(particular + conexa)}</strong></article>`;
-    }).join('')}`;
+    ${timeline('Evolução do faturamento', 'Últimos 12 meses até o mês selecionado. O gerado segue o mês da cobrança ou do atendimento da Conexa. O recebido segue a data do pagamento.', months, [
+      { label: 'Recebido', values: months.map(value => receivedFor(value)) },
+      { label: 'Gerado', values: months.map(generatedFor) }
+    ], money, [
+      { label: 'Recebido · Particular', values: months.map(value => receivedFor(value, p => p.mode !== 'conexa')) },
+      { label: 'Recebido · Conexa', values: months.map(value => receivedFor(value, p => p.mode === 'conexa')) }
+    ])}
+    ${timeline('Evolução dos pacientes atendidos', 'Cada paciente conta uma vez no mês em que teve pelo menos uma sessão realizada.', months, [
+      { label: 'Pacientes atendidos', values: months.map(patientsFor) }
+    ], String)}`;
 }
 
 function render() {

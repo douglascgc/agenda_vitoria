@@ -81,9 +81,23 @@ button.primary { color: #192b20; background: #dbe9d6; border-color: #7e9a77; }
 .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .65rem; }
 .metric { display: grid; gap: .5rem; background: #fffdf8; border: 1px solid #dfd3bf; border-radius: .7rem; padding: 1rem; }
 .metric strong { font-size: 1.4rem; }
-.bar { flex: 1 1 8rem; display: flex; height: .7rem; border-radius: 1rem; background: #eee5d5; overflow: hidden; }
-.bar span:first-child { background: #a8c5a0; }
-.bar span:last-child { background: #e8b4a0; }
+.timeline { margin-top: 1rem; padding: 1rem; border: 1px solid #dfd3bf; border-radius: .75rem; background: #fffdf8; }
+.timeline p { margin: .45rem 0; }
+.chart-scroll { overflow-x: auto; }
+.chart-scroll svg { display: block; width: 100%; min-width: 620px; max-width: 1000px; }
+.chart-scroll text { fill: #394d40; font-size: .76rem; }
+.chart-grid { stroke: #ddd9cc; }
+.series-0 { --line-color: #356548; }
+.series-1 { --line-color: #955239; }
+.chart-series polyline { fill: none; stroke: var(--line-color); stroke-width: 2.5; }
+.chart-series.series-1 polyline { stroke-dasharray: 5 4; }
+.chart-series circle { fill: var(--line-color); stroke: #fffdf8; stroke-width: 1.25; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 1rem; list-style: none; padding: 0; margin: .75rem 0 0; }
+.chart-legend li::before { content: ''; display: inline-block; width: 1.1rem; margin-inline-end: .4rem; vertical-align: middle; border-top: 3px solid var(--line-color); }
+.chart-legend .series-1::before { border-top-style: dashed; }
+.timeline details { overflow-x: auto; }
+.chart-values { min-width: 0; table-layout: auto; margin-top: .65rem; }
+.chart-values th, .chart-values td { height: auto; text-align: start; vertical-align: middle; }
 dialog { width: min(33rem, calc(100vw - 2rem)); max-height: 85vh; color: inherit; border: 1px solid #d4c5a9; background: #fcf8f0; border-radius: 1rem; padding: 1.25rem; }
 dialog::backdrop { background: rgb(242 246 238 / 80%); }
 label { display: grid; gap: .3rem; margin: .75rem 0; }
