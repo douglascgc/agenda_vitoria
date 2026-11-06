@@ -363,7 +363,7 @@ async function configurePush(enable) {
   if (enable && await Notification.requestPermission() !== 'granted') {
     throw new Error('Permita notificações nas configurações do navegador para ativar.');
   }
-  await navigator.serviceWorker.register('./sw.js');
+  await navigator.serviceWorker.register('./sw.js', { scope: './agenda.html' });
   const worker = await navigator.serviceWorker.ready;
   let subscription = await worker.pushManager.getSubscription();
   if (enable) {

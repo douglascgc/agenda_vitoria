@@ -2,7 +2,7 @@
   "name": "Agenda Vitória",
   "short_name": "Agenda",
   "id": "./",
-  "start_url": "./",
+  "start_url": "./agenda.html",
   "display": "standalone",
   "background_color": "#f5f0e8",
   "theme_color": "#2d4a32"

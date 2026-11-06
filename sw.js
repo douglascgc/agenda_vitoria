@@ -9,5 +9,5 @@ self.addEventListener('push', event => {
 
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  event.waitUntil(self.clients.openWindow(self.registration.scope));
+  event.waitUntil(self.clients.openWindow(new URL('agenda.html', self.location.href).href));
 });

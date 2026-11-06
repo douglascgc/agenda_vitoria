@@ -4,11 +4,11 @@ Aplicativo para organizar a agenda, o cadastro de pacientes e os recebimentos da
 
 ## Abrir
 
-Para testar a versão com conta e sincronização, execute `python -m http.server 8000 --bind 127.0.0.1` na pasta do repositório e abra [localhost:8000](http://localhost:8000). O acesso em outros dispositivos requer hospedagem HTTPS. O projeto usa Supabase Auth por e-mail e senha e permite acesso aos dados somente aos endereços aprovados.
+Para testar a versão com conta e sincronização, execute `python -m http.server 8000 --bind 127.0.0.1` na pasta do repositório e abra [localhost:8000](http://localhost:8000). A página inicial leva à Agenda Vitória, que exige login por e-mail e senha na versão hospedada. O acesso em outros dispositivos requer hospedagem HTTPS.
 
 O administrador cria o usuário aprovado em **Authentication → Users → Add user → Create new user**, com confirmação administrativa e senha definida fora do chat. A versão com conta salva as alterações imediatamente e verifica atualizações quando a janela volta ao foco. Se dois dispositivos editarem a mesma versão, a segunda gravação é recusada e o app carrega a versão atual.
 
-Abrir `index.html` diretamente mantém o modo local, com os registros no navegador. Para levar registros locais a uma conta vazia, baixe o JSON em **Conta e backups** e importe o arquivo na versão com login. Use dados fictícios durante a validação.
+Abrir `agenda.html` diretamente mantém o modo local, com os registros no navegador. Para levar registros locais a uma conta vazia, baixe o JSON em **Conta e backups** e importe o arquivo na versão com login. Use dados fictícios durante a validação.
 
 ## Backups e notificações
 
