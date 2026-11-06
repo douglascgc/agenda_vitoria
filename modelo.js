@@ -59,6 +59,18 @@
     data.payments.push({ chargeId: charge.id, mode: charge.mode, amount, date });
   }
 
+  function preservePayments(previous, next) {
+    const before = new Map(charges(previous).map(charge => [charge.id, charge]));
+    const after = new Map(charges(next).map(charge => [charge.id, charge]));
+    for (const payment of next.payments) {
+      const original = before.get(payment.chargeId);
+      const charge = after.get(payment.chargeId);
+      if (!charge || charge.balance < 0 || original?.patientId !== charge.patientId || original?.mode !== charge.mode) {
+        throw new Error('Edite ou exclua os recebimentos vinculados no Financeiro antes de alterar esta sessão.');
+      }
+    }
+  }
+
   function reminders(data, entries, today) {
     const list = [];
     const byMonth = new Map();
@@ -105,7 +117,7 @@
       list(value.payments, p => typeof p.chargeId === 'string' && mode(p.mode) && amount(p.amount) && date(p.date)) &&
       list(value.cycles ?? [], c => id(c.patientId) && Number.isInteger(c.number) && c.number > 0 &&
         c.number <= value.sessions.length + 1 && amount(c.amount) && (!c.due || date(c.due))) &&
-      list(value.absences ?? [], stamp) && object(value.reminders) &&
+      list(value.absences ?? [], a => stamp(a) || object(a) && stamp(a.at) && id(a.sessionId)) && object(value.reminders) &&
       Object.values(value.reminders).every(r => object(r) && typeof r.paused === 'boolean' &&
         (!r.date || date(r.date)) && (!r.originalDue || date(r.originalDue))) &&
       Number.isInteger(value.conexaDay) && value.conexaDay >= 1 && value.conexaDay <= 15)) {
@@ -115,7 +127,7 @@
     return { patients, sessions, hours, payments, reminders, conexaDay, cycles, absences };
   }
 
-  const model = { newData, modes, sum, cycleSlots, charges, addPayment, reminders, validateBackup };
+  const model = { newData, modes, sum, cycleSlots, charges, addPayment, preservePayments, reminders, validateBackup };
   if (typeof module === 'object') module.exports = model;
   else root.AgendaModel = model;
 })(globalThis);

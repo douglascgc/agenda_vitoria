@@ -1,6 +1,6 @@
 'use strict';
 
-const { modes, newData, sum, cycleSlots, charges, addPayment, reminders, validateBackup } = AgendaModel;
+const { modes, newData, sum, cycleSlots, charges, addPayment, preservePayments, reminders, validateBackup } = AgendaModel;
 const key = 'agenda-vitoria-v1';
 const $ = selector => document.querySelector(selector);
 const today = () => iso(new Date());
@@ -217,6 +217,7 @@ function patientsPage() {
       <p>${modes[p.mode]}${p.mode === 'conexa' ? '' : ' · ' + money(p.amount)} · ${p.active ? 'Ativo' : 'Encerrado'}</p>
       ${p.contact ? '<p>' + esc(p.contact) + '</p>' : ''}</div><div class="actions">
       ${btn('Editar', 'patient', p.id)}${p.active ? btn('Encerrar acompanhamento', 'end', p.id) : btn('Reativar', 'activate', p.id)}
+      ${btn('Excluir paciente', 'delete-patient', p.id, 'danger')}
       </div></article>`).join('') || '<p>Cadastre o primeiro paciente para começar.</p>'}`;
 }
 
@@ -230,6 +231,8 @@ function chargeRow(entry) {
     ${rule?.date && rule.originalDue ? ' · Original: ' + dayLabel(rule.originalDue) : ''}</p>
     <p>Previsto ${money(entry.amount)} · Recebido ${money(entry.paid)} · Saldo ${money(entry.balance)}</p></div>
     <div class="actions">${entry.balance > 0 ? btn('Registrar recebimento', 'pay', entry.id, 'primary') : ''}
+    ${entry.mode === 'ciclo' ? btn('Editar ciclo', 'edit-cycle', entry.id) : btn('Editar sessão', 'edit-session', entry.id)}
+    ${rule ? btn('Limpar ajuste do aviso', 'clear-reminder', entry.id) : ''}
     ${entry.balance > 0 && rule?.paused ? btn('Reativar aviso', 'resume', entry.id) : ''}</div></article>`;
 }
 
@@ -249,9 +252,12 @@ function finance(entries) {
         ${batch.map(chargeRow).join('')}</details>`;
     }).join('') || '<p>Nenhuma sessão da Conexa concluída.</p>'}
     <h2 class="section-title">Histórico de recebimentos</h2>
-    ${[...data.payments].sort((a, b) => b.date.localeCompare(a.date)).map(payment => {
+    ${data.payments.map((payment, index) => ({ payment, index }))
+      .sort((a, b) => b.payment.date.localeCompare(a.payment.date)).map(({ payment, index }) => {
       const entry = entries.find(e => e.id === payment.chargeId);
-      return `<div class="record"><span>${dayLabel(payment.date)} · ${patientName(entry?.patientId)} · ${modes[payment.mode]}</span><strong>${money(payment.amount)}</strong></div>`;
+      return `<div class="record"><div><span>${dayLabel(payment.date)} · ${patientName(entry?.patientId)} · ${modes[payment.mode]}</span>
+        <p><strong>${money(payment.amount)}</strong></p></div><div class="actions">
+        ${btn('Editar recebimento', 'edit-payment', index)}${btn('Excluir recebimento', 'delete-payment', index, 'danger')}</div></div>`;
     }).join('') || '<p>Nenhum recebimento registrado.</p>'}`;
 }
 
@@ -274,7 +280,7 @@ function indicators(entries) {
     <div class="metrics">${metric('Recebido no mês', money(received))}${metric('Gerado no mês', money(generated))}
       ${metric('Saldo em aberto · todos os meses', money(open))}${metric('Ocupação · horários atuais', occupancy)}
       ${metric('Realizadas', selectedSessions.filter(s => s.status === 'realizada').length)}
-      ${metric('Faltas registradas', selectedSessions.filter(s => s.absent).length + (data.absences ?? []).filter(at => at.startsWith(month)).length)}
+      ${metric('Faltas registradas', selectedSessions.filter(s => s.absent).length + (data.absences ?? []).filter(a => (a.at ?? a).startsWith(month)).length)}
       ${metric('Canceladas ou em remarcação', selectedSessions.filter(s => ['cancelada', 'remarcar'].includes(s.status)).length)}</div>
     <h2 class="section-title">Recebido por mês</h2>
     ${months.map(value => {
@@ -446,7 +452,7 @@ function bookDialog(at, existing) {
     change(next => {
       if (existing) {
         const previous = next.sessions.find(s => s.id === existing.id);
-        if (previous.absent) next.absences = [...(next.absences ?? []), previous.at];
+        if (previous.absent) next.absences = [...(next.absences ?? []), { at: previous.at, sessionId: previous.id }];
         Object.assign(previous, { at: time, status: 'agendada', absent: false });
       } else {
         for (const start of times) next.sessions.push({ id: id(), patientId: person.id, at: start,
@@ -478,7 +484,10 @@ function hoursDialog() {
 }
 
 function updateSession(session, changes, message) {
-  change(next => Object.assign(next.sessions.find(s => s.id === session.id), changes), message);
+  change(next => {
+    Object.assign(next.sessions.find(s => s.id === session.id), changes);
+    preservePayments(data, next);
+  }, message);
 }
 
 function sessionDialog(session) {
@@ -496,7 +505,8 @@ function sessionDialog(session) {
   ] : session.status === 'remarcar' && active ? [btn('Escolher novo horário', 'rebook', session.id, 'primary')] : [];
   dialog('Atendimento', `<p><strong>${patientName(session.patientId)}</strong> · ${modes[session.mode]}</p>
     <p>${dayLabel(session.at.slice(0, 10))} às ${session.at.slice(11)} · ${statusLabel[session.status]}</p>
-    <div class="actions">${actions.join('')}</div>`, () => $('#dialog').close(), 'Fechar');
+    <div class="actions">${actions.join('')}${btn('Editar sessão', 'edit-session', session.id)}
+    ${btn('Excluir sessão', 'delete-session', session.id, 'danger')}</div>`, () => $('#dialog').close(), 'Fechar');
   $('#dialog form button[type="button"][data-action="close-dialog"]').hidden = true;
 }
 
@@ -531,6 +541,76 @@ function paymentDialog(entry) {
     ${amountField('Valor recebido (R$)', entry.balance / 100, entry.balance / 100)}
     <label>Data do recebimento<input type="date" name="date" value="${today()}" max="${today()}" required></label>`,
     form => change(next => addPayment(next, entry, cents(form, 'amount'), formValue(form, 'date')), 'Recebimento registrado.'));
+}
+
+function editSession(session) {
+  const people = data.patients.filter(p => p.active || p.id === session.patientId);
+  const outcome = session.status === 'decidir' && !session.absent ? 'cancelamento-pendente'
+    : session.status === 'remarcar' && session.absent ? 'falta-remarcar'
+    : session.status === 'perdida' && !session.absent ? 'cancelamento-perdido' : session.status;
+  const outcomes = { ...statusLabel, perdida: 'Falta · contar como perdida',
+    'cancelamento-pendente': 'Cancelamento tardio · decidir',
+    'falta-remarcar': 'Falta · preservar para remarcação',
+    'cancelamento-perdido': 'Cancelamento tardio · contar como perdida' };
+  dialog('Editar sessão', `
+    <label>Paciente<select name="patient">${people.map(p => option(p.id, p.name, session.patientId)).join('')}</select></label>
+    <label>Data e horário<input type="datetime-local" name="at" value="${esc(session.at)}" required></label>
+    <label>Modalidade<select name="mode">${Object.entries(modes).map(([value, label]) => option(value, label, session.mode)).join('')}</select></label>
+    <label>Situação<select name="status">${Object.entries(outcomes).map(([value, label]) => option(value, label, outcome)).join('')}</select></label>
+    <label>Valor da sessão, ciclo ou repasse previsto (R$)
+      <input name="amount" type="number" min="0" step="0.01" value="${session.amount / 100}" required></label>
+    <label>Data e hora do aviso de cancelamento <input name="notice" type="datetime-local" value="${esc(session.notice)}" max="${localStamp()}"></label>
+    <p class="hint">Alterar uma sessão do ciclo pode atualizar a contagem e o vencimento. Recebimentos já registrados continuam vinculados à cobrança original.</p>`, form => {
+    const chosen = formValue(form, 'status');
+    const status = { 'cancelamento-pendente': 'decidir', 'falta-remarcar': 'remarcar', 'cancelamento-perdido': 'perdida' }[chosen] ?? chosen;
+    const updated = { ...session, patientId: formValue(form, 'patient'), at: formValue(form, 'at'),
+      mode: formValue(form, 'mode'), status, amount: cents(form, 'amount'),
+      notice: formValue(form, 'notice'), absent: ['decidir', 'perdida', 'falta-remarcar'].includes(chosen) };
+    if (!Number.isSafeInteger(updated.amount) || updated.amount < 0 ||
+      (updated.mode !== 'conexa' || status === 'realizada') && updated.amount === 0) throw new Error('Informe um valor válido.');
+    if (status !== 'agendada' && status !== 'cancelada' && status !== 'remarcar' && updated.at > localStamp()) {
+      throw new Error('A sessão ainda não começou.');
+    }
+    if (blocksTime(updated) && data.sessions.some(s => s.id !== session.id && blocksTime(s) && overlaps(s.at, updated.at))) {
+      throw new Error('O horário se sobrepõe a outra sessão.');
+    }
+    updateSession(session, updated, 'Sessão atualizada.');
+  });
+}
+
+function editPayment(index, entry, payment) {
+  const available = entry.balance + payment.amount;
+  dialog('Editar recebimento', `<p>${patientName(entry.patientId)}</p>
+    ${amountField('Valor recebido (R$)', payment.amount / 100, available / 100)}
+    <label>Data do recebimento<input type="date" name="date" value="${esc(payment.date)}" max="${today()}" required></label>`, form => {
+    const amount = cents(form, 'amount');
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount > available) throw new Error('Informe um valor até o saldo da cobrança.');
+    change(next => Object.assign(next.payments[index], { amount, date: formValue(form, 'date') }), 'Recebimento atualizado.');
+  });
+}
+
+function editCycle(entry) {
+  const rule = data.reminders[entry.id];
+  dialog('Editar ciclo', `<p>${patientName(entry.patientId)} · Ciclo ${entry.number}</p>
+    ${amountField('Valor do ciclo (R$)', entry.amount / 100)}
+    <label>Vencimento ajustado<input type="date" name="date" value="${esc(rule?.date)}"></label>
+    <p class="hint">Deixe o vencimento vazio para seguir a primeira sessão do ciclo.</p>`, form => {
+    const amount = cents(form, 'amount');
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount < entry.paid) throw new Error('O valor precisa cobrir o que já foi recebido.');
+    change(next => {
+      next.cycles ??= [];
+      const saved = next.cycles.find(c => c.patientId === entry.patientId && c.number === entry.number);
+      if (saved) saved.amount = amount;
+      else next.cycles.push({ patientId: entry.patientId, number: entry.number, amount });
+      const date = formValue(form, 'date');
+      if (date || rule?.paused) next.reminders[entry.id] = { date, originalDue: rule?.originalDue || entry.due, paused: Boolean(rule?.paused) };
+      else delete next.reminders[entry.id];
+    }, 'Ciclo atualizado.');
+  });
+}
+
+function confirmDelete(title, description, mutate, message) {
+  dialog(title, `<p>${description}</p>`, () => change(mutate, message), 'Confirmar exclusão');
 }
 
 function reconcileDialog(reference, entries) {
@@ -568,7 +648,34 @@ function handle(action, value) {
     case 'book': bookDialog(value); break;
     case 'rebook': bookDialog(session.at, session); break;
     case 'patient': patientDialog(patient(value)); break;
+    case 'delete-patient': {
+      const sessions = new Set(data.sessions.filter(s => s.patientId === value).map(s => s.id));
+      const relatedCharge = chargeId => sessions.has(chargeId) || chargeId.startsWith(value + '-ciclo-');
+      const payments = data.payments.filter(p => relatedCharge(p.chargeId)).length;
+      confirmDelete('Excluir paciente',
+        `${patientName(value)} será excluído junto com ${sessions.size} atendimento(s), ${payments} recebimento(s) e as cobranças vinculadas. Os indicadores serão recalculados.`,
+        next => {
+          next.patients = next.patients.filter(p => p.id !== value);
+          next.sessions = next.sessions.filter(s => !sessions.has(s.id));
+          next.payments = next.payments.filter(p => !relatedCharge(p.chargeId));
+          if (next.cycles) next.cycles = next.cycles.filter(c => c.patientId !== value);
+          if (next.absences) next.absences = next.absences.filter(a => !sessions.has(a.sessionId));
+          for (const chargeId of Object.keys(next.reminders)) if (relatedCharge(chargeId)) delete next.reminders[chargeId];
+        }, 'Paciente e registros vinculados excluídos.');
+      break;
+    }
     case 'session': sessionDialog(session); break;
+    case 'edit-session': editSession(session); break;
+    case 'delete-session':
+      confirmDelete('Excluir sessão',
+        'A sessão será removida da agenda. A cobrança avulsa ou o repasse vinculado será removido, e a contagem do ciclo será recalculada.',
+        next => {
+          next.sessions = next.sessions.filter(s => s.id !== value);
+          if (next.absences) next.absences = next.absences.filter(a => a.sessionId !== value);
+          delete next.reminders[value];
+          preservePayments(data, next);
+        }, 'Sessão excluída.');
+      break;
     case 'complete': completionDialog(session); break;
     case 'cancel-session': cancellationDialog(session); break;
     case 'absent':
@@ -578,6 +685,22 @@ function handle(action, value) {
     case 'lost': updateSession(session, { status: 'perdida' }, 'Sessão marcada como perdida.'); break;
     case 'preserve': updateSession(session, { status: 'remarcar' }, 'Sessão disponível para remarcação.'); break;
     case 'pay': paymentDialog(entry); break;
+    case 'edit-cycle': editCycle(entry); break;
+    case 'clear-reminder':
+      confirmDelete('Limpar ajuste do aviso', 'O alerta voltará a seguir o vencimento da cobrança.',
+        next => { delete next.reminders[value]; }, 'Ajuste removido.');
+      break;
+    case 'edit-payment': {
+      const payment = data.payments[Number(value)];
+      const charge = entries.find(c => c.id === payment.chargeId);
+      if (!charge) throw new Error('A cobrança original não está disponível.');
+      editPayment(Number(value), charge, payment);
+      break;
+    }
+    case 'delete-payment':
+      confirmDelete('Excluir recebimento', 'O valor será retirado do caixa e o saldo da cobrança será recalculado.',
+        next => { next.payments.splice(Number(value), 1); }, 'Recebimento excluído.');
+      break;
     case 'finance': navigate('financeiro'); break;
     case 'reconcile': reconcileDialog(value, entries); break;
     case 'defer':
