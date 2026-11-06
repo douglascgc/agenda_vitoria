@@ -34,15 +34,14 @@ Deno.serve(async request => {
   const token = request.headers.get('X-Agenda-Token') ?? '';
   if (!/^[a-f0-9-]{36}$/i.test(token)) return new Response(null, { status: 401 });
   try {
-    const settings = () => database('rpc/agenda_push_settings', 'POST', { in_token: token });
-    let [config] = await settings();
+    let [config] = await database('rpc/agenda_push_claim', 'POST', { in_nonce: token });
     if (!config) return new Response(null, { status: 401 });
     if (!config.public_key) {
       const keys = webpush.generateVAPIDKeys();
-      await database('rpc/agenda_push_initialize', 'POST', {
-        in_token: token, in_public: keys.publicKey, in_private: keys.privateKey
+      await database('rpc/agenda_push_set_keys', 'POST', {
+        in_public: keys.publicKey, in_private: keys.privateKey
       });
-      [config] = await settings();
+      config = { public_key: keys.publicKey, private_key: keys.privateKey };
     }
     const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     const devices = await database('rpc/agenda_push_queue', 'POST', { in_day: today });

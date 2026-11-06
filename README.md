@@ -14,7 +14,7 @@ Abrir `index.html` diretamente mantém o modo local, com os registros no navegad
 
 - O Supabase cria uma cópia diária após o primeiro salvamento. As cópias ficam no mesmo banco, com retenção de 30 dias. Em **Conta e backups**, é possível baixar os dados atuais ou baixar e restaurar uma cópia diária.
 - Em **Conta e backups → Ativar notificações**, autorize o dispositivo. No iPhone, primeiro adicione o app à Tela de Início e abra por ela. O serviço verifica pendências a partir das 8h, horário de São Paulo, com novas tentativas durante a mesma hora. O aviso na tela bloqueada é genérico.
-- O esquema está em `supabase/setup.sql` e `supabase/push.sql`. A função `agenda-alerts` precisa receber `supabase/functions/agenda-alerts/index.ts` e o `modelo.js` da raiz como arquivos adjacentes no pacote de deploy. Atualize a função se as regras de alerta em `modelo.js` mudarem.
+- O esquema inicial está em `supabase/setup.sql` e `supabase/push.sql`. A atualização `supabase/push-nonce.sql` faz o agendador usar credenciais descartáveis com validade de dois minutos. A função `agenda-alerts` precisa receber `supabase/functions/agenda-alerts/index.ts` e o `modelo.js` da raiz como arquivos adjacentes no pacote de deploy. Atualize a função se as regras de alerta em `modelo.js` mudarem.
 
 ## Hospedagem
 
