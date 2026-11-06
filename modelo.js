@@ -86,7 +86,36 @@
     return list;
   }
 
-  const model = { newData, modes, sum, cycleSlots, charges, addPayment, reminders };
+  function validateBackup(value) {
+    const date = text => typeof text === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(text);
+    const time = text => typeof text === 'string' && /^\d{2}:\d{2}$/.test(text);
+    const stamp = text => typeof text === 'string' && date(text.slice(0, 10)) &&
+      text[10] === 'T' && time(text.slice(11));
+    const id = text => typeof text === 'string' && /^[a-f0-9-]{9,100}$/i.test(text);
+    const amount = n => Number.isSafeInteger(n) && n >= 0;
+    const mode = name => Object.hasOwn(modes, name);
+    const list = (records, valid) => Array.isArray(records) && records.every(record => record && valid(record));
+    const object = item => item && typeof item === 'object' && !Array.isArray(item);
+    if (!(object(value) &&
+      list(value.patients, p => id(p.id) && typeof p.name === 'string' && typeof p.contact === 'string' &&
+        typeof p.active === 'boolean' && mode(p.mode) && amount(p.amount)) &&
+      list(value.sessions, s => id(s.id) && id(s.patientId) && stamp(s.at) && mode(s.mode) && amount(s.amount) &&
+        ['agendada', 'realizada', 'perdida', 'cancelada', 'decidir', 'remarcar'].includes(s.status)) &&
+      list(value.hours, h => Number.isInteger(h.day) && h.day >= 0 && h.day < 7 && time(h.start) && time(h.end)) &&
+      list(value.payments, p => typeof p.chargeId === 'string' && mode(p.mode) && amount(p.amount) && date(p.date)) &&
+      list(value.cycles ?? [], c => id(c.patientId) && Number.isInteger(c.number) && c.number > 0 &&
+        c.number <= value.sessions.length + 1 && amount(c.amount) && (!c.due || date(c.due))) &&
+      list(value.absences ?? [], stamp) && object(value.reminders) &&
+      Object.values(value.reminders).every(r => object(r) && typeof r.paused === 'boolean' &&
+        (!r.date || date(r.date)) && (!r.originalDue || date(r.originalDue))) &&
+      Number.isInteger(value.conexaDay) && value.conexaDay >= 1 && value.conexaDay <= 15)) {
+      throw new Error('O arquivo não é uma cópia válida da Agenda Vitória.');
+    }
+    const { patients, sessions, hours, payments, reminders, conexaDay, cycles, absences } = value;
+    return { patients, sessions, hours, payments, reminders, conexaDay, cycles, absences };
+  }
+
+  const model = { newData, modes, sum, cycleSlots, charges, addPayment, reminders, validateBackup };
   if (typeof module === 'object') module.exports = model;
   else root.AgendaModel = model;
 })(globalThis);

@@ -3,12 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://xuuxfguvgkcpxidxrqjw.supabase.co; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="theme-color" content="#2d4a32">
+<link rel="manifest" href="manifest.webmanifest">
 <title>Agenda · Vitória Farias</title>
 <link rel="stylesheet" href="estilo.css">
 <script defer src="modelo.js"></script>
+<script defer src="nuvem.js"></script>
 <script defer src="app.js"></script>
 </head>
 <body>
+<section id="account-gate" hidden>
+  <form id="login">
+    <h1>Agenda Vitória</h1>
+    <label>E-mail<input type="email" name="email" autocomplete="username" required></label>
+    <label>Senha<input type="password" name="password" autocomplete="current-password" required></label>
+    <div class="actions"><button class="primary">Entrar</button></div>
+    <p id="account-message" role="status"></p>
+  </form>
+</section>
 <aside>
   <p class="brand">Vitória Farias <small>PSICOLOGIA</small></p>
   <nav aria-label="Seções do aplicativo">
@@ -16,6 +29,7 @@
     <button class="nav-item" data-view="pacientes">Pacientes</button>
     <button class="nav-item" data-view="financeiro">Financeiro</button>
     <button class="nav-item" data-view="indicadores">Indicadores</button>
+    <button class="nav-item" data-view="conta" id="account-nav" hidden>Conta e backups</button>
   </nav>
 </aside>
 <main>

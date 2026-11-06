@@ -89,6 +89,11 @@ label.check { display: flex; align-items: flex-start; gap: .55rem; }
 input, select { font: inherit; color: inherit; min-width: 0; padding: .45rem; border: 1px solid #a4af9b; border-radius: .35rem; background: #fffdf8; }
 fieldset { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; border: 1px solid #d4c5a9; margin-bottom: .35rem; }
 .error { color: #8a3325; }
+[hidden] { display: none !important; }
+body.signed-out { display: block; }
+body.signed-out > aside, body.signed-out > main { display: none; }
+#account-gate { max-width: 29rem; margin: 12vh auto 2rem; padding: 1.5rem; }
+#account-gate form { padding: 1.5rem; background: #fffaf1; border-radius: 1rem; border: 1px solid #d4c5a9; }
 @media (max-width: 720px) {
   aside nav { display: flex; flex-wrap: wrap; margin-top: .55rem; }
   .nav-item { width: auto; margin-top: 0; padding: .45rem .55rem; }

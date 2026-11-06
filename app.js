@@ -1,6 +1,6 @@
 'use strict';
 
-const { modes, newData, sum, cycleSlots, charges, addPayment, reminders } = AgendaModel;
+const { modes, newData, sum, cycleSlots, charges, addPayment, reminders, validateBackup } = AgendaModel;
 const key = 'agenda-vitoria-v1';
 const $ = selector => document.querySelector(selector);
 const today = () => iso(new Date());
@@ -21,7 +21,7 @@ const statusLabel = {
   agendada: 'Agendada', realizada: 'Realizada', perdida: 'Perdida',
   cancelada: 'Cancelada', decidir: 'Falta · decidir', remarcar: 'A remarcar'
 };
-const nav = { agenda: 'Agenda da semana', pacientes: 'Pacientes', financeiro: 'Financeiro', indicadores: 'Indicadores' };
+const nav = { agenda: 'Agenda da semana', pacientes: 'Pacientes', financeiro: 'Financeiro', indicadores: 'Indicadores', conta: 'Conta e backups' };
 const weekdayNames = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 const id = () => crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
 const btn = (label, action, value = '', variant = '') =>
@@ -39,6 +39,10 @@ let data;
 let view = 'agenda';
 let week = weekStart(today());
 let month = today().slice(0, 7);
+const cloudMode = location.protocol !== 'file:';
+let revision = 0;
+let saving = false;
+let signedIn = false;
 
 function reload() {
   snapshot = localStorage.getItem(key);
@@ -46,6 +50,34 @@ function reload() {
 }
 
 function change(mutate, message = '') {
+  if (saving) return;
+  if (cloudMode) {
+    const next = structuredClone(data);
+    mutate(next);
+    saving = true;
+    AgendaCloud.save(next, revision).then(row => {
+      revision = row.revision;
+      data = row.payload;
+      completeChange(message);
+    }).catch(async error => {
+      if (!AgendaCloud.hasSession()) {
+        showGate(error.message);
+        return;
+      }
+      if (error.conflict) {
+        try {
+          applyCloud(await AgendaCloud.load());
+          if ($('#dialog').open) $('#dialog').close();
+          render();
+        } catch {
+          error = new Error('Não foi possível atualizar os dados. Reabra o app e tente novamente.');
+        }
+      }
+      const target = $('#dialog').open ? $('#dialog .error') : $('#feedback');
+      target.textContent = error.message;
+    }).finally(() => { saving = false; });
+    return;
+  }
   if (localStorage.getItem(key) !== snapshot) {
     reload();
     throw new Error('Os registros mudaram em outra aba. Feche este formulário e tente novamente.');
@@ -56,11 +88,44 @@ function change(mutate, message = '') {
   localStorage.setItem(key, serialized);
   snapshot = serialized;
   data = next;
+  completeChange(message);
+}
+
+function completeChange(message) {
   const returnFocus = $('#dialog').open && $('#dialog').contains(document.activeElement);
   if ($('#dialog').open) $('#dialog').close();
   render();
   if (returnFocus) $('#alert-panel').hidden ? $('#title').focus() : $('#alert-toggle').focus();
   $('#feedback').textContent = message;
+}
+
+function applyCloud(row) {
+  data = row.payload ?? newData();
+  revision = row.revision;
+}
+
+function showGate(message = '') {
+  signedIn = false;
+  data = null;
+  revision = 0;
+  if ($('#dialog').open) $('#dialog').close();
+  $('#content').replaceChildren();
+  $('#alert-list').replaceChildren();
+  $('#feedback').textContent = '';
+  setAlerts(false);
+  document.body.classList.add('signed-out');
+  $('#account-gate').hidden = false;
+  $('#account-message').textContent = message;
+}
+
+function enter(row) {
+  applyCloud(row);
+  signedIn = true;
+  view = 'agenda';
+  document.body.classList.remove('signed-out');
+  $('#account-gate').hidden = true;
+  $('#account-nav').hidden = false;
+  render();
 }
 
 function setAlerts(open) {
@@ -72,10 +137,11 @@ function dialog(title, fields, submit, saveLabel = 'Salvar') {
   const box = $('#dialog');
   $('#dialog-body').innerHTML = `<form><h2>${title}</h2>${fields}<p class="error" role="alert"></p>
     <div class="actions">${btn('Voltar', 'close-dialog')} <button class="primary">${saveLabel}</button></div></form>`;
-  $('#dialog-body form').onsubmit = event => {
+  $('#dialog-body form').onsubmit = async event => {
     event.preventDefault();
-    try { submit(event.currentTarget); }
-    catch (error) { event.currentTarget.querySelector('.error').textContent = error.message; }
+    const form = event.currentTarget;
+    try { await submit(form); }
+    catch (error) { form.querySelector('.error').textContent = error.message; }
   };
   if (!box.open) box.showModal();
 }
@@ -233,8 +299,95 @@ function render() {
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
-  $('#content').innerHTML = { agenda: schedule, pacientes: patientsPage, financeiro: finance, indicadores: indicators }[view](entries);
+  $('#content').innerHTML = { agenda: schedule, pacientes: patientsPage, financeiro: finance, indicadores: indicators, conta: accountPage }[view](entries);
   renderAlerts(entries);
+}
+
+function accountPage() {
+  if (!cloudMode) return `<p>Baixe uma cópia para transferir os registros locais à sua conta.</p>
+    <div class="toolbar">${btn('Baixar meus dados', 'export')}</div>`;
+  return `<p>Os registros são salvos no servidor. As cópias diárias ficam disponíveis por até 30 dias.</p>
+    <div class="toolbar">${btn('Ver cópias disponíveis', 'backups')}${btn('Baixar meus dados', 'export')}
+    ${revision === 0 ? btn('Importar dados locais', 'import-local') : ''}${btn('Sair', 'sign-out')}</div>
+    <h2>Notificações neste dispositivo</h2>
+    <p>Quando houver pendências, você poderá receber um aviso pela manhã. No iPhone, adicione o app à Tela de Início e abra por ela para ativar.</p>
+    <div class="toolbar">${btn('Ativar notificações', 'push-on')}${btn('Desativar notificações', 'push-off')}</div>`;
+}
+
+async function configurePush(enable) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    throw new Error('Este navegador não oferece notificações neste modo. No iPhone, abra o app pela Tela de Início.');
+  }
+  if (enable && await Notification.requestPermission() !== 'granted') {
+    throw new Error('Permita notificações nas configurações do navegador para ativar.');
+  }
+  await navigator.serviceWorker.register('./sw.js');
+  const worker = await navigator.serviceWorker.ready;
+  let subscription = await worker.pushManager.getSubscription();
+  if (enable) {
+    if (!subscription) {
+      const publicKey = await AgendaCloud.pushKey();
+      if (!publicKey) throw new Error('O serviço de notificações ainda está sendo preparado.');
+      const raw = publicKey.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(publicKey.length / 4) * 4, '=');
+      subscription = await worker.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: Uint8Array.from(atob(raw), char => char.charCodeAt(0))
+      });
+    }
+    await AgendaCloud.saveDevice(subscription);
+  } else if (subscription) {
+    await AgendaCloud.deleteDevice(subscription.endpoint);
+    await subscription.unsubscribe();
+  }
+  $('#feedback').textContent = enable ? 'Notificações ativadas neste dispositivo.' : 'Notificações desativadas neste dispositivo.';
+}
+
+function download(payload, date) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'agenda-vitoria-' + date + '.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function accountAction(action, value) {
+  if (action === 'push-on' || action === 'push-off') {
+    await configurePush(action === 'push-on');
+  } else if (action === 'sign-out') {
+    showGate();
+    await AgendaCloud.signOut();
+  } else if (action === 'export') {
+    download(data, today());
+  } else if (action === 'backups') {
+    const list = await AgendaCloud.backups();
+    if (!signedIn) return;
+    dialog('Cópias disponíveis', list.map(row => `<div class="record">${dayLabel(row.backup_day)}
+      <div class="actions">${btn('Baixar', 'backup-download', row.backup_day)}${btn('Restaurar', 'backup-restore', row.backup_day)}</div></div>`)
+      .join('') || '<p>A primeira cópia será feita após o primeiro dia de uso.</p>', () => $('#dialog').close(), 'Fechar');
+  } else if (action === 'import-local') {
+    dialog('Importar dados locais', '<label>Arquivo baixado da Agenda Vitória<input type="file" name="backup" accept=".json,application/json" required></label>',
+      async form => {
+        const file = formValue(form, 'backup');
+        if (file.size > 5000000) throw new Error('Selecione um arquivo com até 5 MB.');
+        const payload = validateBackup(JSON.parse(await file.text()));
+        if (revision !== 0) throw new Error('A conta já tem registros.');
+        change(next => Object.assign(next, payload), 'Dados locais copiados.');
+      }, 'Importar');
+  } else {
+    const payload = await AgendaCloud.readBackup(value);
+    if (!signedIn) return;
+    if (!payload) throw new Error('A cópia selecionada não está mais disponível.');
+    if (action === 'backup-download') download(payload, value);
+    else dialog('Restaurar cópia', `<p>A cópia de ${dayLabel(value)} substituirá os registros atuais. Uma cópia dos registros atuais será baixada antes da restauração.</p>`,
+      () => {
+        download(data, today());
+        change(next => {
+          for (const name of Object.keys(next)) delete next[name];
+          Object.assign(next, payload);
+        }, 'Cópia restaurada.');
+      }, 'Restaurar');
+  }
 }
 
 const localStamp = () => {
@@ -475,13 +628,19 @@ function handle(action, value) {
 }
 
 $('#alert-toggle').addEventListener('click', () => setAlerts($('#alert-panel').hidden));
-document.addEventListener('click', event => {
+document.addEventListener('click', async event => {
   if (!event.target.closest('.alerts, dialog')) setAlerts(false);
   const navigation = event.target.closest('[data-view]');
   if (navigation) navigate(navigation.dataset.view);
   const button = event.target.closest('[data-action]');
   if (button) {
-    try { handle(button.dataset.action, button.dataset.id); }
+    if (saving) return;
+    try {
+      const { action, id: value } = button.dataset;
+      if (['sign-out', 'export', 'backups', 'import-local', 'backup-download', 'backup-restore', 'push-on', 'push-off'].includes(action)) {
+        await accountAction(action, value);
+      } else handle(action, value);
+    }
     catch (error) {
       const target = $('#dialog').open ? $('#dialog .error') : $('#feedback');
       target.textContent = error.message;
@@ -502,16 +661,49 @@ document.addEventListener('change', event => {
   }
 });
 window.addEventListener('storage', event => {
-  if (event.key === key && !$('#dialog').open) {
+  if (!cloudMode && event.key === key && !$('#dialog').open) {
     reload();
     render();
   }
 });
-window.addEventListener('focus', () => {
-  if (!$('#dialog').open) {
+window.addEventListener('focus', async () => {
+  if (cloudMode) {
+    if (!signedIn || saving || $('#dialog').open) return;
+    const previous = revision;
+    try {
+      const row = await AgendaCloud.load();
+      if (signedIn && !saving && !$('#dialog').open && revision === previous) {
+        applyCloud(row);
+        render();
+      }
+    } catch (error) {
+      if (!AgendaCloud.hasSession()) showGate(error.message);
+    }
+  } else if (!$('#dialog').open) {
     reload();
     renderAlerts(charges(data));
   }
 });
-reload();
-render();
+
+if (cloudMode) {
+  showGate();
+  $('#login').addEventListener('submit', async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const button = form.querySelector('button');
+    if (button.disabled) return;
+    button.disabled = true;
+    $('#account-message').textContent = 'Entrando…';
+    try { enter(await AgendaCloud.signIn(formValue(form, 'email'), formValue(form, 'password'))); }
+    catch (error) { showGate(error.message); }
+    finally {
+      form.elements.password.value = '';
+      button.disabled = false;
+    }
+  });
+  if (AgendaCloud.hasSession()) AgendaCloud.load().then(enter).catch(error => showGate(error.message));
+} else {
+  reload();
+  $('#account-nav').hidden = false;
+  render();
+}

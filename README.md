@@ -1,12 +1,24 @@
 # Agenda Vitória
 
-Aplicativo local para organizar a agenda, o cadastro de pacientes e os recebimentos da Vitória.
+Aplicativo para organizar a agenda, o cadastro de pacientes e os recebimentos da Vitória.
 
 ## Abrir
 
-Abra `index.html` em um navegador moderno. Comece cadastrando um paciente e definindo a disponibilidade semanal. Também é possível servir os arquivos estáticos em localhost para manter uma origem fixa.
+Para testar a versão com conta e sincronização, execute `python -m http.server 8000 --bind 127.0.0.1` na pasta do repositório e abra [localhost:8000](http://localhost:8000). O acesso em outros dispositivos requer hospedagem HTTPS. O projeto usa Supabase Auth por e-mail e senha e permite acesso aos dados somente aos endereços aprovados.
 
-Os registros começam vazios e ficam no armazenamento do navegador, no perfil e endereço em que o app foi aberto. Limpar os dados do navegador pode apagar os registros. A versão local não tem login, sincronização, cópia de segurança automática ou envio de notificações em segundo plano. Use dados fictícios para validar o fluxo antes de cadastrar pacientes reais.
+O administrador cria o usuário aprovado em **Authentication → Users → Add user → Create new user**, com confirmação administrativa e senha definida fora do chat. A versão com conta salva as alterações imediatamente e verifica atualizações quando a janela volta ao foco. Se dois dispositivos editarem a mesma versão, a segunda gravação é recusada e o app carrega a versão atual.
+
+Abrir `index.html` diretamente mantém o modo local, com os registros no navegador. Para levar registros locais a uma conta vazia, baixe o JSON em **Conta e backups** e importe o arquivo na versão com login. Use dados fictícios durante a validação.
+
+## Backups e notificações
+
+- O Supabase cria uma cópia diária após o primeiro salvamento. As cópias ficam no mesmo banco, com retenção de 30 dias. Em **Conta e backups**, é possível baixar os dados atuais ou baixar e restaurar uma cópia diária.
+- Em **Conta e backups → Ativar notificações**, autorize o dispositivo. No iPhone, primeiro adicione o app à Tela de Início e abra por ela. O serviço verifica pendências a partir das 8h, horário de São Paulo, com novas tentativas durante a mesma hora. O aviso na tela bloqueada é genérico.
+- O esquema está em `supabase/setup.sql` e `supabase/push.sql`. A função `agenda-alerts` precisa receber `supabase/functions/agenda-alerts/index.ts` e o `modelo.js` da raiz como arquivos adjacentes no pacote de deploy. Atualize a função se as regras de alerta em `modelo.js` mudarem.
+
+## Hospedagem
+
+Execute `node scripts/build-site.mjs` para preparar a pasta `dist`. Em uma hospedagem estática com HTTPS, configure esse comando e use `dist` como diretório de publicação. No Cloudflare Pages, conecte a branch `main` do GitHub, sem preset de framework.
 
 ## Fluxos
 
