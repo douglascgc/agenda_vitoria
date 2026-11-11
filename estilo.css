@@ -138,3 +138,11 @@ body.signed-out > aside, body.signed-out > main { display: none; }
 .agenda-list-item .actions { margin: 0; }
 .text-action { padding: 0; border: 0; background: transparent; font-weight: 650; text-decoration: underline; text-underline-offset: .15em; }
 .availability-warning { display: block; width: fit-content; margin-top: .35rem; padding: .15rem .4rem; border-radius: .35rem; background: #f7e2d4; color: #703d23; font-weight: 650; }
+.clinical-fields { display: block; padding: .65rem .85rem; border-radius: .6rem; }
+.clinical-fields legend, .clinical-note summary { font-weight: 650; }
+textarea { width: 100%; resize: vertical; font: inherit; color: inherit; background: #fffdf8; border: 1px solid #a4af9b; border-radius: .35rem; padding: .5rem; }
+.clinical-note { padding: .75rem; border: 1px solid #d5ddd0; border-radius: .6rem; background: #fffdf8; }
+.clinical-note small { display: block; margin-top: .5rem; color: #394d40; }
+.clinical-copy dt { font-weight: 650; }
+.clinical-copy dd { margin: .25rem 0 .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.clinical-addendum { border-inline-start: 3px solid #9eb697; padding-inline-start: .75rem; }

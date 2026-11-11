@@ -21,7 +21,7 @@ const statusLabel = {
   agendada: 'Agendada', realizada: 'Realizada', perdida: 'Perdida',
   cancelada: 'Cancelada', decidir: 'Falta · decidir', remarcar: 'A remarcar'
 };
-const nav = { agenda: 'Agenda da semana', pendencias: 'Pendências', pacientes: 'Pacientes', financeiro: 'Financeiro', indicadores: 'Indicadores', conta: 'Conta e backups' };
+const nav = { agenda: 'Agenda da semana', pendencias: 'Pendências', pacientes: 'Pacientes', prontuarios: 'Prontuários', financeiro: 'Financeiro', indicadores: 'Indicadores', conta: 'Conta e backups' };
 const weekdayNames = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 const id = () => crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
 const btn = (label, action, value = '', variant = '') =>
@@ -45,19 +45,22 @@ const cloudMode = location.protocol !== 'file:';
 let revision = 0;
 let saving = false;
 let signedIn = false;
+let clinicalPatients = [];
+let accountVersion = 0;
 
 function reload() {
   snapshot = localStorage.getItem(key);
   data = snapshot ? JSON.parse(snapshot) : newData();
 }
 
-function change(mutate, message = '') {
+function change(mutate, message = '', clinicalRecord) {
   if (saving) return;
   if (cloudMode) {
     const next = structuredClone(data);
     mutate(next);
     saving = true;
-    AgendaCloud.save(next, revision).then(row => {
+    const save = clinicalRecord ? AgendaCloud.saveClinicalSession(next, revision, clinicalRecord) : AgendaCloud.save(next, revision);
+    save.then(row => {
       revision = row.revision;
       data = row.payload;
       completeChange(message);
@@ -107,10 +110,13 @@ function applyCloud(row) {
 }
 
 function showGate(message = '') {
+  accountVersion++;
   signedIn = false;
   data = null;
   revision = 0;
+  clinicalPatients = [];
   if ($('#dialog').open) $('#dialog').close();
+  $('#dialog-body').replaceChildren();
   $('#content').replaceChildren();
   $('#alert-list').replaceChildren();
   $('#feedback').textContent = '';
@@ -137,12 +143,13 @@ function setAlerts(open) {
 
 function dialog(title, fields, submit, saveLabel = 'Salvar') {
   const box = $('#dialog');
+  $('#dialog-body').onclick = null;
   $('#dialog-body').innerHTML = `<form><h2>${title}</h2>${fields}<p class="error" role="alert"></p>
     <div class="actions">${btn('Voltar', 'close-dialog')} <button class="primary">${saveLabel}</button></div></form>`;
   $('#dialog-body form').onsubmit = async event => {
     event.preventDefault();
     const form = event.currentTarget;
-    try { await submit(form); }
+    try { await submit(form, event.submitter); }
     catch (error) { form.querySelector('.error').textContent = error.message; }
   };
   if (!box.open) box.showModal();
@@ -155,7 +162,9 @@ function pendingItems(entries) {
     .sort((a, b) => a.at.localeCompare(b.at));
   const conflicts = data.sessions.filter(s => s.status === 'agendada' && s.at >= localStamp() && outsideDateHours(s))
     .sort((a, b) => a.at.localeCompare(b.at));
-  return [...unrecorded.map(session => ({ type: 'session', session })),
+  const clinical = cloudMode ? data.sessions.filter(session => session.status === 'realizada' && session.clinicalPending)
+    .map(session => ({ type: 'clinical', session })) : [];
+  return [...unrecorded.map(session => ({ type: 'session', session })), ...clinical,
     ...conflicts.map(session => ({ type: 'session', session, conflict: true })), ...reminders(data, entries, today())];
 }
 
@@ -168,6 +177,9 @@ function renderAlerts(items) {
 }
 
 function pendingCard(item) {
+    if (item.type === 'clinical') return `<article class="card"><h3>Registro clínico pendente</h3>
+      <p>${patientName(item.session.patientId)} · ${appointmentTime(item.session)}</p>
+      <div class="actions">${btn('Registrar evolução', 'clinical-note', item.session.id, 'primary')}</div></article>`;
     if (item.type === 'cycle') return `<article class="card"><h3>Ciclo perto do fim</h3>
       <p>${esc(item.patient.name)} · Resta 1 sessão</p><p>Próximo vencimento: ${dayLabel(item.next)}</p>
       <div class="actions">${btn('Ver agenda', 'patient-agenda', item.patient.id)}</div></article>`;
@@ -194,7 +206,7 @@ function pendingCard(item) {
 
 function pendingPage(items) {
   const groups = [
-    ['Atendimentos', ['session']], ['Financeiro', ['payment', 'conexa']], ['Próximos ciclos', ['cycle']]
+    ['Atendimentos', ['session']], ['Prontuários', ['clinical']], ['Financeiro', ['payment', 'conexa']], ['Próximos ciclos', ['cycle']]
   ];
   return groups.map(([title, types]) => {
     const group = items.filter(item => types.includes(item.type));
@@ -457,8 +469,129 @@ function render() {
     else button.removeAttribute('aria-current');
   }
   $('#content').innerHTML = view === 'pendencias' ? pendingPage(items)
-    : { agenda: schedule, pacientes: patientsPage, financeiro: finance, indicadores: indicators, conta: accountPage }[view](entries);
+    : { agenda: schedule, pacientes: patientsPage, prontuarios: clinicalPage, financeiro: finance, indicadores: indicators, conta: accountPage }[view](entries);
   renderAlerts(items);
+}
+
+function clinicalPage() {
+  if (!cloudMode) return '<p class="record">O prontuário está disponível na versão com login.</p>';
+  const archived = new Map();
+  for (const row of clinicalPatients) {
+    if (!patient(row.patient_id) && !archived.has(row.patient_id)) archived.set(row.patient_id, row.patient_name);
+  }
+  const patients = [...data.patients.map(p => [p.id, p.name, p.active ? 'Em acompanhamento' : 'Acompanhamento encerrado']),
+    ...Array.from(archived, ([patientId, name]) => [patientId, name, 'Cadastro arquivado'])];
+  return `<p class="hint">Área clínica de acesso restrito.</p>
+    ${patients.map(([patientId, name, status]) => `<article class="record"><div><h2>${esc(name)}</h2><p>${status}</p></div>
+      <div class="actions">${btn('Abrir prontuário', 'clinical-history', patientId, 'primary')}</div></article>`).join('') ||
+      '<p class="record">Cadastre um paciente para iniciar o prontuário.</p>'}`;
+}
+
+function clinicalText(name, label, value = '') {
+  return `<label>${label}<textarea name="${name}" rows="3" maxlength="2500">${esc(value)}</textarea></label>`;
+}
+
+function clinicalContent(form, fields) {
+  return Object.fromEntries(fields.map(field => [field, formValue(form, field)?.trim() ?? '']));
+}
+
+function evolutionFields() {
+  return `<fieldset class="clinical-fields"><legend>Registro da sessão</legend>
+    ${clinicalText('evolution', 'Evolução')}${clinicalText('procedures', 'Procedimentos e intervenções')}
+    ${clinicalText('plan', 'Plano e próximos passos')}
+    <details><summary>Encaminhamento ou encerramento</summary>
+      ${clinicalText('referral', 'Encaminhamento ou encerramento, se aplicável')}</details></fieldset>`;
+}
+
+function evolutionRecord(session, form) {
+  const content = clinicalContent(form, ['evolution', 'procedures', 'plan', 'referral']);
+  if (!content.evolution || !content.procedures) throw new Error('Preencha a evolução e os procedimentos da sessão.');
+  return { id: id(), patient_id: session.patientId, patient_name: patient(session.patientId).name,
+    session_id: session.id, content };
+}
+
+function clinicalNoteDialog(session) {
+  if (!cloudMode || session.status !== 'realizada' || session.clinicalPending === false) return;
+  dialog('Registrar evolução', `<p>${patientName(session.patientId)} · ${appointmentTime(session)}</p>${evolutionFields()}`, form => {
+    const record = evolutionRecord(session, form);
+    change(next => { next.sessions.find(item => item.id === session.id).clinicalPending = false; },
+      'Evolução registrada no prontuário.', record);
+  }, 'Salvar evolução');
+}
+
+const clinicalLabels = { demand: 'Demanda inicial', objectives: 'Objetivos do acompanhamento', evolution: 'Evolução',
+  procedures: 'Procedimentos e intervenções', plan: 'Plano e próximos passos', referral: 'Encaminhamento ou encerramento', amendment: 'Adendo' };
+
+function clinicalDetails(content) {
+  return Object.entries(clinicalLabels).filter(([field]) => content[field])
+    .map(([field, label]) => `<dt>${label}</dt><dd>${esc(content[field])}</dd>`).join('');
+}
+
+function clinicalStamp(row) {
+  const date = new Date(row.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  return `<small>Registro em ${esc(date)} · ${esc(AgendaCloud.accountEmail())}</small>`;
+}
+
+async function openClinical(patientId) {
+  const version = accountVersion;
+  const rows = await AgendaCloud.clinicalHistory(patientId);
+  if (!signedIn || version !== accountVersion) return;
+  const person = patient(patientId);
+  const name = person?.name ?? rows[0]?.patient_name;
+  if (!name) throw new Error('Prontuário indisponível.');
+  const profile = rows.find(row => row.kind === 'profile');
+  const notes = rows.filter(row => row.kind === 'session').sort((a, b) => b.session_at.localeCompare(a.session_at));
+  const recorded = new Set(notes.map(row => row.session_id));
+  const unrecorded = data.sessions.filter(s => s.patientId === patientId && s.status === 'realizada' &&
+    !recorded.has(s.id) && s.clinicalPending !== false).sort((a, b) => b.at.localeCompare(a.at));
+  dialog(esc(name), `<h3>Demanda e objetivos</h3>
+    ${profile ? `<dl class="clinical-copy">${clinicalDetails(profile.content)}</dl>` : '<p>Dados iniciais ainda em branco.</p>'}
+    ${person ? `<div class="actions">${btn('Editar demanda e objetivos', 'clinical-profile', patientId)}</div>` : ''}
+    ${unrecorded.length ? `<details><summary>Sessões sem evolução (${unrecorded.length})</summary>
+      ${unrecorded.map(s => `<div class="record">${appointmentTime(s)}<div class="actions">
+        ${btn('Registrar evolução', 'clinical-note', s.id)}</div></div>`).join('')}</details>` : ''}
+    <h3 class="section-title">Evoluções por sessão</h3>
+    ${notes.map(row => `<details class="clinical-note"><summary>${appointmentTime({ at: row.session_at })}</summary>
+      ${clinicalStamp(row)}<dl class="clinical-copy">${clinicalDetails(row.content)}</dl>
+      ${rows.filter(addendum => addendum.parent_id === row.id).reverse().map(addendum =>
+        `<div class="clinical-addendum">${clinicalStamp(addendum)}<dl class="clinical-copy">${clinicalDetails(addendum.content)}</dl></div>`).join('')}
+      <div class="actions">${btn('Adicionar adendo', 'clinical-amendment', row.id)}</div></details>`).join('') ||
+      '<p>Nenhuma evolução registrada.</p>'}`, () => $('#dialog').close(), 'Fechar');
+  $('#dialog form [data-action="close-dialog"]').hidden = true;
+  $('#dialog-body').onclick = event => {
+    const button = event.target.closest('[data-action="clinical-amendment"]');
+    if (!button) return;
+    event.stopPropagation();
+    const original = notes.find(row => row.id === button.dataset.id);
+    clinicalAppendDialog(patientId, name, original);
+  };
+}
+
+function clinicalAppendDialog(patientId, name, original, profile = {}) {
+  const amendment = Boolean(original);
+  dialog(amendment ? 'Adicionar adendo' : 'Editar demanda e objetivos',
+    amendment ? `<p>${esc(name)} · ${appointmentTime({ at: original.session_at })}</p>${clinicalText('amendment', 'Adendo')}`
+      : clinicalText('demand', 'Demanda inicial', profile.demand) + clinicalText('objectives', 'Objetivos do acompanhamento', profile.objectives),
+    async form => {
+      if (saving) return;
+      const content = clinicalContent(form, amendment ? ['amendment'] : ['demand', 'objectives']);
+      if (!Object.values(content).some(Boolean)) throw new Error('Preencha o registro.');
+      saving = true;
+      try {
+        await AgendaCloud.appendClinical({ id: id(), patient_id: patientId, patient_name: name,
+          kind: amendment ? 'amendment' : 'profile', ...(amendment ? { parent_id: original.id } : {}), content });
+        await openClinical(patientId);
+      } finally { saving = false; }
+    });
+}
+
+async function reconcileClinicalStatus(payload) {
+  const records = await AgendaCloud.clinicalIndex();
+  const recorded = new Map(records.filter(row => row.session_id).map(row => [row.session_id, row.patient_id]));
+  for (const session of payload.sessions) {
+    if (recorded.get(session.id) === session.patientId) session.clinicalPending = false;
+    else if (session.clinicalPending === false) session.clinicalPending = session.status === 'realizada';
+  }
 }
 
 function accountPage() {
@@ -529,6 +662,8 @@ async function accountAction(action, value) {
         const file = formValue(form, 'backup');
         if (file.size > 5000000) throw new Error('Selecione um arquivo com até 5 MB.');
         const payload = validateBackup(JSON.parse(await file.text()));
+        await reconcileClinicalStatus(payload);
+        if (!form.isConnected || !signedIn) return;
         if (revision !== 0) throw new Error('A conta já tem registros.');
         change(next => Object.assign(next, payload), 'Dados locais copiados.');
       }, 'Importar');
@@ -538,7 +673,9 @@ async function accountAction(action, value) {
     if (!payload) throw new Error('A cópia selecionada não está mais disponível.');
     if (action === 'backup-download') download(payload, value);
     else dialog('Restaurar cópia', `<p>A cópia de ${dayLabel(value)} substituirá os registros atuais. Uma cópia dos registros atuais será baixada antes da restauração.</p>`,
-      () => {
+      async form => {
+        await reconcileClinicalStatus(payload);
+        if (!form.isConnected || !signedIn) return;
         download(data, today());
         change(next => {
           for (const name of Object.keys(next)) delete next[name];
@@ -790,8 +927,11 @@ function sessionDialog(session) {
   ] : session.status === 'remarcar' && active ? [btn('Escolher novo horário', 'rebook', session.id, 'primary')] : [];
   dialog('Atendimento', `<p><strong>${patientName(session.patientId)}</strong> · ${modes[session.mode]}</p>
     <p>${dayLabel(session.at.slice(0, 10))} às ${session.at.slice(11)} · ${session.duration ?? 60} min · ${statusLabel[session.status]}</p>
+    ${cloudMode && session.status === 'realizada' && session.clinicalPending !== undefined ?
+      `<p class="hint">${session.clinicalPending ? 'Registro clínico pendente' : 'Registro clínico concluído'}</p>` : ''}
     ${availabilityWarning(session)}
-    <div class="actions">${actions.join('')}${btn('Ver histórico', 'patient-history', session.patientId)}${btn('Editar sessão', 'edit-session', session.id)}
+    <div class="actions">${actions.join('')}${cloudMode && session.status === 'realizada' && session.clinicalPending ?
+      btn('Registrar evolução', 'clinical-note', session.id) : ''}${btn('Ver histórico', 'patient-history', session.patientId)}${btn('Editar sessão', 'edit-session', session.id)}
     ${btn('Excluir sessão', 'delete-session', session.id, 'danger')}</div>`, () => $('#dialog').close(), 'Fechar');
   $('#dialog form button[type="button"][data-action="close-dialog"]').hidden = true;
 }
@@ -799,16 +939,25 @@ function sessionDialog(session) {
 function completionDialog(session) {
   if (session.at > localStamp()) throw new Error('A sessão ainda não começou.');
   const conexa = session.mode === 'conexa';
-  dialog('Concluir sessão', `<p>${patientName(session.patientId)}</p>${conexa ? amountField('Repasse previsto (R$)') : ''}
+  const clinical = cloudMode && session.clinicalPending !== false;
+  dialog('Concluir sessão', `<p>${patientName(session.patientId)} · ${appointmentTime(session)}</p>${conexa ? amountField('Repasse previsto (R$)') : ''}
     ${session.mode === 'sessao' ? `<p>Valor da sessão: ${money(session.amount)}</p>
-      <label class="check"><input name="paid" type="checkbox"> Recebido hoje</label>` : ''}`, form => {
+      <label class="check"><input name="paid" type="checkbox"> Recebido hoje</label>` : ''}
+    ${clinical ? evolutionFields() : ''}`, (form, submitter) => {
     const amount = conexa ? cents(form, 'amount') : session.amount;
     if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('Informe um valor válido.');
+    const later = clinical && submitter?.value === 'later';
+    const record = clinical && !later ? evolutionRecord(session, form) : undefined;
     change(next => {
-      Object.assign(next.sessions.find(s => s.id === session.id), { status: 'realizada', amount });
+      const updated = next.sessions.find(s => s.id === session.id);
+      Object.assign(updated, { status: 'realizada', amount });
+      if (clinical) updated.clinicalPending = later;
       if (formValue(form, 'paid')) addPayment(next, charges(next).find(entry => entry.id === session.id), amount, today());
-    }, 'Sessão concluída.');
-  });
+    }, later ? 'Sessão concluída. O registro clínico ficou em Pendências.'
+      : record ? 'Sessão concluída e evolução registrada.' : 'Sessão concluída.', record);
+  }, clinical ? 'Salvar registro e concluir' : 'Salvar');
+  if (clinical) $('#dialog form > .actions').insertAdjacentHTML('beforeend',
+    '<button type="submit" value="later">Concluir e registrar depois</button>');
 }
 
 function cancellationDialog(session) {
@@ -852,6 +1001,10 @@ function editSession(session) {
     const updated = { ...session, patientId: formValue(form, 'patient'), at: formValue(form, 'at'),
       mode: formValue(form, 'mode'), status, amount: cents(form, 'amount'),
       notice: formValue(form, 'notice'), absent: ['decidir', 'perdida', 'falta-remarcar'].includes(chosen) };
+    if (cloudMode && status === 'realizada' && session.status !== 'realizada' && updated.clinicalPending !== false) updated.clinicalPending = true;
+    if (session.clinicalPending === false && (updated.patientId !== session.patientId || updated.at !== session.at || status !== 'realizada')) {
+      throw new Error('Esta sessão já tem evolução registrada. Para corrigir o registro clínico, adicione um adendo no prontuário.');
+    }
     if (!Number.isSafeInteger(updated.amount) || updated.amount < 0 ||
       (updated.mode !== 'conexa' || status === 'realizada') && updated.amount === 0) throw new Error('Informe um valor válido.');
     if (status !== 'agendada' && status !== 'cancelada' && status !== 'remarcar' && updated.at > localStamp()) {
@@ -954,7 +1107,7 @@ function handle(action, value) {
       const relatedCharge = chargeId => sessions.has(chargeId) || chargeId.startsWith(value + '-ciclo-');
       const payments = data.payments.filter(p => relatedCharge(p.chargeId)).length;
       confirmDelete('Excluir paciente',
-        `${patientName(value)} será excluído junto com ${sessions.size} atendimento(s), ${payments} recebimento(s) e as cobranças vinculadas. Os indicadores serão recalculados.`,
+        `${patientName(value)} será excluído junto com ${sessions.size} atendimento(s), ${payments} recebimento(s) e as cobranças vinculadas. O prontuário continuará disponível na aba Prontuários.`,
         next => {
           next.patients = next.patients.filter(p => p.id !== value);
           next.sessions = next.sessions.filter(s => !sessions.has(s.id));
@@ -969,7 +1122,7 @@ function handle(action, value) {
     case 'edit-session': editSession(session); break;
     case 'delete-session':
       confirmDelete('Excluir sessão',
-        'A sessão será removida da agenda. A cobrança avulsa ou o repasse vinculado será removido, e a contagem do ciclo será recalculada.',
+        'A sessão será removida da agenda. A cobrança avulsa ou o repasse vinculado será removido, e a contagem do ciclo será recalculada. A evolução registrada permanecerá no prontuário.',
         next => {
           next.sessions = next.sessions.filter(s => s.id !== value);
           if (next.absences) next.absences = next.absences.filter(a => a.sessionId !== value);
@@ -978,6 +1131,7 @@ function handle(action, value) {
         }, 'Sessão excluída.');
       break;
     case 'complete': completionDialog(session); break;
+    case 'clinical-note': clinicalNoteDialog(session); break;
     case 'cancel-session': cancellationDialog(session); break;
     case 'absent':
       if (session.at > localStamp()) throw new Error('A sessão ainda não começou.');
@@ -1061,16 +1215,43 @@ function handle(action, value) {
 }
 
 $('#alert-toggle').addEventListener('click', () => setAlerts($('#alert-panel').hidden));
+$('#dialog').addEventListener('close', () => {
+  if (!$('#dialog').open) {
+    $('#dialog-body').onclick = null;
+    $('#dialog-body').replaceChildren();
+  }
+});
 document.addEventListener('click', async event => {
   if (!event.target.closest('.alerts, dialog')) setAlerts(false);
   const navigation = event.target.closest('[data-view]');
-  if (navigation) navigate(navigation.dataset.view);
+  if (navigation) {
+    const destination = navigation.dataset.view;
+    navigate(destination);
+    if (destination === 'prontuarios' && cloudMode) {
+      const version = accountVersion;
+      try {
+        const rows = await AgendaCloud.clinicalIndex();
+        if (signedIn && version === accountVersion && view === destination) {
+          clinicalPatients = rows;
+          render();
+        }
+      } catch (error) {
+        if (signedIn && view === destination) $('#feedback').textContent = error.message;
+      }
+    }
+  }
   const button = event.target.closest('[data-action]');
   if (button) {
     if (saving) return;
     try {
       const { action, id: value } = button.dataset;
-      if (['sign-out', 'export', 'backups', 'import-local', 'backup-download', 'backup-restore', 'push-on', 'push-off'].includes(action)) {
+      if (action === 'clinical-history') {
+        await openClinical(value);
+      } else if (action === 'clinical-profile') {
+        const rows = await AgendaCloud.clinicalHistory(value);
+        if (signedIn && $('#dialog').open) clinicalAppendDialog(value, patient(value).name, null,
+          rows.find(row => row.kind === 'profile')?.content);
+      } else if (['sign-out', 'export', 'backups', 'import-local', 'backup-download', 'backup-restore', 'push-on', 'push-off'].includes(action)) {
         await accountAction(action, value);
       } else handle(action, value);
     }

@@ -76,6 +76,10 @@ const AgendaCloud = (() => {
     } catch (error) {
       if (error.status !== 409) throw error;
     }
+    return savedRow(rows);
+  }
+
+  function savedRow(rows) {
     if (!rows?.length) {
       const error = new Error('Outro dispositivo salvou antes. Os dados foram atualizados. Abra a ação novamente.');
       error.conflict = true;
@@ -83,6 +87,28 @@ const AgendaCloud = (() => {
     }
     return rows[0];
   }
+
+  async function saveClinicalSession(payload, revision, record) {
+    return savedRow(await dataRequest('rpc/agenda_save_clinical_session', {
+      method: 'POST', body: { in_revision: revision, in_payload: payload, in_record: record }
+    }));
+  }
+
+  async function clinicalRows(fields, patientId) {
+    const query = new URLSearchParams({ select: fields, order: 'created_at.desc,id.desc', limit: '250' });
+    if (patientId) query.set('patient_id', 'eq.' + patientId);
+    const rows = [];
+    while (true) {
+      query.set('offset', String(rows.length));
+      const batch = await dataRequest('agenda_clinical?' + query);
+      rows.push(...batch);
+      if (batch.length < 250) return rows;
+    }
+  }
+
+  const clinicalIndex = () => clinicalRows('patient_id,patient_name,session_id');
+  const clinicalHistory = patientId => clinicalRows('id,patient_id,patient_name,kind,session_id,session_at,parent_id,content,created_at', patientId);
+  const appendClinical = record => dataRequest('agenda_clinical', { method: 'POST', body: record });
 
   async function signIn(email, password) {
     try {
@@ -116,5 +142,7 @@ const AgendaCloud = (() => {
   }
   const deleteDevice = endpoint => dataRequest('agenda_push_devices?endpoint=eq.' + encodeURIComponent(endpoint), { method: 'DELETE' });
 
-  return { load, save, signIn, signOut, backups, readBackup, pushKey, saveDevice, deleteDevice, hasSession: () => Boolean(session) };
+  return { load, save, saveClinicalSession, clinicalIndex, clinicalHistory, appendClinical,
+    signIn, signOut, backups, readBackup, pushKey, saveDevice, deleteDevice,
+    accountEmail: () => session?.user?.email ?? '', hasSession: () => Boolean(session) };
 })();

@@ -38,3 +38,8 @@ Na Agenda, abra **Sincronizar Google**, informe o ID público do cliente OAuth e
 ## Verificação
 
 Execute `node --check app.js` e `node --test modelo.test.js`.
+## Prontuários
+
+Na versão com login, **Concluir sessão** permite salvar a evolução na hora ou abrir uma pendência para registrar depois. A aba **Prontuários** reúne demanda, objetivos, evoluções e adendos. A versão atual usa esse fluxo também para atendimentos da Conexa.
+
+O esquema clínico está em `supabase/clinical.sql`. As evoluções ficam fora dos registros, das exportações e das cópias administrativas da Agenda. O banco grava a conclusão e a evolução na mesma transação. A exclusão administrativa de paciente ou sessão preserva o prontuário. Antes de usar dados reais, valide a rotina de backup clínico e restauração do projeto.
