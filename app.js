@@ -38,6 +38,7 @@ let snapshot;
 let data;
 let view = 'agenda';
 let week = weekStart(today());
+let agendaMode = 'grid';
 let month = today().slice(0, 7);
 let financeMonth = month;
 const cloudMode = location.protocol !== 'file:';
@@ -152,7 +153,10 @@ function pendingItems(entries) {
   const unrecorded = data.sessions.filter(s => s.status === 'agendada' &&
     Date.parse(s.at + 'Z') + (s.duration ?? 60) * 60000 <= now)
     .sort((a, b) => a.at.localeCompare(b.at));
-  return [...unrecorded.map(session => ({ type: 'session', session })), ...reminders(data, entries, today())];
+  const conflicts = data.sessions.filter(s => s.status === 'agendada' && s.at >= localStamp() && outsideDateHours(s))
+    .sort((a, b) => a.at.localeCompare(b.at));
+  return [...unrecorded.map(session => ({ type: 'session', session })),
+    ...conflicts.map(session => ({ type: 'session', session, conflict: true })), ...reminders(data, entries, today())];
 }
 
 function renderAlerts(items) {
@@ -172,9 +176,9 @@ function pendingCard(item) {
       <div class="actions">${btn('Conciliar sessões', 'reconcile', item.month)}</div></article>`;
     if (item.type === 'session') {
       const missing = item.session.status === 'agendada';
-      return `<article class="card"><h3>${missing ? 'Sessão sem registro' : statusLabel[item.session.status]}</h3>
+      return `<article class="card"><h3>${item.conflict ? 'Fora da disponibilidade' : missing ? 'Sessão sem registro' : statusLabel[item.session.status]}</h3>
       <p>${patientName(item.session.patientId)} · ${appointmentTime(item.session)}</p>
-      <div class="actions">${btn(missing ? 'Registrar atendimento' : 'Resolver', 'session', item.session.id, 'primary')}</div></article>`;
+      <div class="actions">${btn(missing && !item.conflict ? 'Registrar atendimento' : 'Resolver', 'session', item.session.id, 'primary')}</div></article>`;
     }
     const { charge } = item;
     const due = data.reminders[charge.id]?.date || charge.due;
@@ -201,8 +205,9 @@ function pendingPage(items) {
 
 function slotStarts(day) {
   const index = (new Date(day + 'T12:00').getDay() + 6) % 7;
-  return data.hours.filter(hour => hour.day === index).flatMap(hour => {
-    const toMinutes = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+  const override = data.dateHours?.find(hour => hour.date === day);
+  const hours = override ? (override.closed ? [] : [override]) : data.hours.filter(hour => hour.day === index);
+  return hours.flatMap(hour => {
     const starts = [];
     for (let time = toMinutes(hour.start); time + 60 <= toMinutes(hour.end); time += 60) {
       starts.push([Math.floor(time / 60), time % 60].map(n => String(n).padStart(2, '0')).join(':'));
@@ -211,30 +216,72 @@ function slotStarts(day) {
   });
 }
 
+const toMinutes = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+
+function outsideDateHours(session) {
+  const date = session.at.slice(0, 10);
+  const override = data.dateHours?.find(hour => hour.date === date);
+  if (!override) return false;
+  const start = toMinutes(session.at.slice(11, 16));
+  return override.closed || start < toMinutes(override.start) || start + (session.duration ?? 60) > toMinutes(override.end);
+}
+
+function sessionsOn(date) {
+  return data.sessions.filter(s => s.at.slice(0, 10) === date).sort((a, b) => a.at.localeCompare(b.at));
+}
+
+function availabilityWarning(session) {
+  return session.status === 'agendada' && outsideDateHours(session)
+    ? '<small class="availability-warning">Fora da disponibilidade</small>' : '';
+}
+
+function scheduleList() {
+  const days = agendaMode === 'today' ? [today()] : weekdayNames.map((_, i) => shift(week, i));
+  const grouped = days.map(date => {
+    const sessions = sessionsOn(date);
+    if (!sessions.length) return '';
+    return `<section class="agenda-list-day"><h2>${dayLabel(date)}</h2>
+      ${sessions.map(session => `<article class="record agenda-list-item">
+        <div><strong>${session.at.slice(11, 16)}</strong> · ${btn(patientName(session.patientId), 'patient-history', session.patientId, 'text-action')}
+        <p>${modes[session.mode]} · ${session.duration ?? 60} min · ${statusLabel[session.status]}</p>
+        ${availabilityWarning(session)}</div>
+        <div class="actions">${btn('Abrir sessão', 'session', session.id)}</div>
+      </article>`).join('')}</section>`;
+  }).join('');
+  return grouped || '<p class="record">Nenhum atendimento agendado para este período.</p>';
+}
+
 function schedule() {
+  const toolbar = `<div class="toolbar"><div class="agenda-modes" role="group" aria-label="Visualização da agenda">
+    ${[['grid', 'Grade semanal'], ['today', 'Hoje em lista'], ['week', 'Semana em lista']].map(([value, label]) =>
+      `<button type="button" data-action="agenda-mode" data-id="${value}" aria-pressed="${agendaMode === value}">${label}</button>`).join('')}
+    </div></div>
+    <div class="toolbar">${agendaMode === 'today' ? '' : btn('← Semana anterior', 'week', '-7') + btn('Semana atual', 'week', '0') +
+      btn('Próxima semana →', 'week', '7')}<span class="spacer"></span>
+    ${btn('Disponibilidade semanal', 'hours')}${btn('Disponibilidade por data', 'date-hours')}
+    ${btn('Sincronizar Google', 'google')}${btn('+ Nova sessão', 'book', '', 'primary')}</div>`;
+  if (agendaMode !== 'grid') return toolbar + scheduleList();
   const days = weekdayNames.map((name, index) => {
     const date = shift(week, index);
-    const sessions = data.sessions.filter(s => s.at.slice(0, 10) === date)
-      .sort((a, b) => a.at.localeCompare(b.at));
+    const sessions = sessionsOn(date);
+    const override = data.dateHours?.find(hour => hour.date === date);
     const starts = slotStarts(date);
     const times = [...new Set([...starts, ...sessions.map(s => s.at.slice(11, 16))])].sort();
     return `<section class="day ${date === today() ? 'today' : ''}"><h2>${name}<small>${dayLabel(date).slice(0, 5)}</small></h2>
+      ${override ? `<p class="empty">${override.closed ? 'Dia bloqueado' : 'Horário ajustado'}</p>` : ''}
       ${times.map(time => {
         const scheduled = sessions.filter(s => s.at.slice(11, 16) === time);
         const cards = scheduled.map(s => {
           const index = s.mode === 'ciclo' ? cycleSlots(data.sessions, s.patientId).findIndex(slot => slot.id === s.id) : -1;
           const label = index >= 0 ? 'Sessão ' + (index % 4 + 1) + ' de 4' : modes[s.mode];
-          return btn(`<strong>${patientName(s.patientId)}</strong><small>${label}</small><small>${statusLabel[s.status]}</small>`,
+          return btn(`<strong>${patientName(s.patientId)}</strong><small>${label}</small><small>${statusLabel[s.status]}</small>${availabilityWarning(s)}`,
             'session', s.id, 'session');
         }).join('');
         return `<div class="time"><span>${time}</span>${cards}${starts.includes(time) && !data.sessions.some(s => blocksTime(s) && overlaps(s, { at: date + 'T' + time })) ?
           btn('Livre', 'book', date + 'T' + time, 'free') : ''}</div>`;
       }).join('') || '<p class="empty">Sem horários</p>'}</section>`;
   }).join('');
-  return `<div class="toolbar">${btn('← Semana anterior', 'week', '-7')}${btn('Hoje', 'week', '0')}
-    ${btn('Próxima semana →', 'week', '7')}<span class="spacer"></span>
-    ${btn('Disponibilidade', 'hours')}${btn('Sincronizar Google', 'google')}${btn('+ Nova sessão', 'book', '', 'primary')}</div>
-    <div class="week">${days}</div>`;
+  return toolbar + `<div class="week">${days}</div>`;
 }
 
 function patientsPage() {
@@ -242,9 +289,36 @@ function patientsPage() {
     ${data.patients.map(p => `<article class="record"><div><h2>${esc(p.name)}</h2>
       <p>${modes[p.mode]}${p.mode === 'conexa' ? '' : ' · ' + money(p.amount)} · ${p.active ? 'Ativo' : 'Encerrado'}</p>
       ${p.contact ? '<p>' + esc(p.contact) + '</p>' : ''}</div><div class="actions">
-      ${btn('Editar', 'patient', p.id)}${p.active ? btn('Encerrar acompanhamento', 'end', p.id) : btn('Reativar', 'activate', p.id)}
+      ${btn('Ver histórico', 'patient-history', p.id, 'primary')}${btn('Editar', 'patient', p.id)}${p.active ? btn('Encerrar acompanhamento', 'end', p.id) : btn('Reativar', 'activate', p.id)}
       ${btn('Excluir paciente', 'delete-patient', p.id, 'danger')}
       </div></article>`).join('') || '<p>Cadastre o primeiro paciente para começar.</p>'}`;
+}
+
+function patientHistory(person, entries) {
+  const sessions = data.sessions.filter(s => s.patientId === person.id).sort((a, b) => b.at.localeCompare(a.at));
+  const next = [...sessions].reverse().find(s => s.status === 'agendada' && s.at >= localStamp());
+  const bills = entries.filter(entry => entry.patientId === person.id);
+  const cycle = bills.find(entry => entry.mode === 'ciclo' && entry.consumed < 4);
+  const ids = new Set(bills.map(entry => entry.id));
+  const paid = data.payments.filter(payment => ids.has(payment.chargeId)).sort((a, b) => b.date.localeCompare(a.date));
+  const missed = (data.absences ?? []).filter(item => sessions.some(s => s.id === item.sessionId));
+  const total = sum(bills.filter(bill => bill.mode !== 'conexa' && bill.due && bill.due <= today()), bill => bill.balance);
+  dialog(esc(person.name), `<p>${modes[person.mode]}${person.contact ? ' · ' + esc(person.contact) : ''}</p>
+    <dl class="totals">
+      <dt>Próxima sessão</dt><dd>${next ? appointmentTime(next) : 'A definir'}</dd>
+      <dt>Ciclo atual</dt><dd>${cycle ? cycle.consumed + ' de 4 utilizadas' : '—'}</dd>
+      <dt>Faltas registradas</dt><dd>${sessions.filter(s => s.absent).length + missed.length}</dd>
+      <dt>Particular em aberto até hoje</dt><dd>${money(total)}</dd>
+    </dl>
+    <details open><summary>Atendimentos (${sessions.length})</summary>
+      ${sessions.map(s => `<div class="record"><span>${appointmentTime(s)} · ${statusLabel[s.status]}${availabilityWarning(s)}</span>
+        <div class="actions">${btn('Abrir sessão', 'session', s.id)}</div></div>`).join('') || '<p>Nenhum atendimento registrado.</p>'}</details>
+    ${missed.length ? `<details><summary>Faltas antes de remarcações (${missed.length})</summary>
+      <ul>${missed.map(item => `<li>${appointmentTime(item)}</li>`).join('')}</ul></details>` : ''}
+    <details><summary>Recebimentos (${paid.length})</summary>
+      ${paid.map(p => `<div class="record"><span>${dayLabel(p.date)} · ${modes[p.mode]}</span><strong>${money(p.amount)}</strong></div>`).join('') || '<p>Nenhum recebimento registrado.</p>'}</details>`,
+  () => $('#dialog').close(), 'Fechar');
+  $('#dialog form [data-action="close-dialog"]').hidden = true;
 }
 
 function chargeRow(entry) {
@@ -374,7 +448,8 @@ function render() {
   const items = pendingItems(entries);
   $('#title').textContent = nav[view];
   $('#title').tabIndex = -1;
-  $('#subtitle').textContent = view === 'agenda' ? dayLabel(week) + ' a ' + dayLabel(shift(week, 6)) : '';
+  $('#subtitle').textContent = view === 'agenda' ?
+    (agendaMode === 'today' ? dayLabel(today()) : dayLabel(week) + ' a ' + dayLabel(shift(week, 6))) : '';
   for (const button of document.querySelectorAll('nav [data-view]')) {
     const active = button.dataset.view === view;
     button.classList.toggle('selected', active);
@@ -563,6 +638,7 @@ function reviewGoogle(events) {
           throw new Error('Conflito de horário em ' + dayLabel(event.at.slice(0, 10)) + ' às ' + event.at.slice(11) + '. Confira a agenda ou ignore esse evento.');
         }
         const slot = { at: event.at, duration: event.duration };
+        if (outsideDateHours(slot)) throw new Error('O evento de ' + appointmentTime(slot) + ' está fora da disponibilidade dessa data.');
         if (existing) Object.assign(existing, slot);
         else next.sessions.push({ ...slot, id: id(), patientId: person.id, mode: person.mode,
           amount: person.amount, status: 'agendada', googleRef: event.ref });
@@ -616,6 +692,9 @@ function bookDialog(at, existing) {
     const number = existing ? 1 : Number(formValue(form, 'weeks'));
     const person = patient(existing?.patientId ?? formValue(form, 'patient'));
     const times = Array.from({ length: number }, (_, index) => shift(time.slice(0, 10), index * 7) + time.slice(10));
+    if (times.some(at => outsideDateHours({ at, duration: existing?.duration }))) {
+      throw new Error('Um dos horários está fora da disponibilidade definida para a data.');
+    }
     if (times.some(start => data.sessions.some(s => s.id !== existing?.id && blocksTime(s) &&
       overlaps({ at: start, duration: existing?.duration }, s)))) {
       throw new Error('Um dos horários se sobrepõe a outra sessão.');
@@ -630,6 +709,7 @@ function bookDialog(at, existing) {
           status: 'agendada', mode: person.mode, amount: person.amount });
       }
       week = weekStart(time.slice(0, 10));
+      if (agendaMode === 'today' && time.slice(0, 10) !== today()) agendaMode = 'grid';
     }, existing ? 'Sessão remarcada.' : 'Agendamento salvo.');
   });
 }
@@ -654,6 +734,40 @@ function hoursDialog() {
   });
 }
 
+function dateHoursDialog(date = '') {
+  const overrides = [...(data.dateHours ?? [])].sort((a, b) => a.date.localeCompare(b.date));
+  const current = overrides.find(item => item.date === date);
+  dialog('Disponibilidade por data', `<p class="hint">Bloqueie um dia ou defina um horário especial. Sessões já marcadas ficam na agenda para revisão.</p>
+    <label>Data<input type="date" name="date" value="${esc(date || (agendaMode === 'today' ? today() : week))}" ${current ? 'readonly' : ''} required></label>
+    <label>Disponibilidade<select name="availability">
+      ${option('closed', 'Dia bloqueado', current?.closed === false ? 'custom' : 'closed')}
+      ${option('custom', 'Horário especial', current?.closed === false ? 'custom' : 'closed')}
+    </select></label>
+    <fieldset id="date-time"><legend>Horário especial</legend>
+      <label>Início<input type="time" name="start" value="${esc(current?.start || '09:00')}" required></label>
+      <label>Fim<input type="time" name="end" value="${esc(current?.end || '17:00')}" required></label></fieldset>
+    ${current ? `<div class="actions">${btn('Voltar aos horários semanais', 'remove-date-hours', date)}</div>` :
+      overrides.map(item => `<div class="record"><span>${dayLabel(item.date)} · ${item.closed ? 'Dia bloqueado' : item.start + '–' + item.end}</span>
+      <div class="actions">${btn('Editar data', 'date-hours', item.date)}</div></div>`).join('')}`, form => {
+    const day = formValue(form, 'date');
+    const closed = formValue(form, 'availability') === 'closed';
+    const start = formValue(form, 'start');
+    const end = formValue(form, 'end');
+    if (!closed && toMinutes(end) - toMinutes(start) < 60) throw new Error('Informe um intervalo de pelo menos uma hora.');
+    change(next => {
+      next.dateHours = (next.dateHours ?? []).filter(item => item.date !== day);
+      next.dateHours.push(closed ? { date: day, closed } : { date: day, closed, start, end });
+      week = weekStart(day);
+      if (agendaMode === 'today' && day !== today()) agendaMode = 'grid';
+    }, 'Disponibilidade salva. Veja em Pendências se algum atendimento precisar de revisão.');
+  });
+  const select = $('#dialog select[name="availability"]');
+  const hours = $('#date-time');
+  const toggleHours = () => { hours.hidden = hours.disabled = select.value === 'closed'; };
+  select.addEventListener('change', toggleHours);
+  toggleHours();
+}
+
 function updateSession(session, changes, message) {
   change(next => {
     Object.assign(next.sessions.find(s => s.id === session.id), changes);
@@ -676,7 +790,8 @@ function sessionDialog(session) {
   ] : session.status === 'remarcar' && active ? [btn('Escolher novo horário', 'rebook', session.id, 'primary')] : [];
   dialog('Atendimento', `<p><strong>${patientName(session.patientId)}</strong> · ${modes[session.mode]}</p>
     <p>${dayLabel(session.at.slice(0, 10))} às ${session.at.slice(11)} · ${session.duration ?? 60} min · ${statusLabel[session.status]}</p>
-    <div class="actions">${actions.join('')}${btn('Editar sessão', 'edit-session', session.id)}
+    ${availabilityWarning(session)}
+    <div class="actions">${actions.join('')}${btn('Ver histórico', 'patient-history', session.patientId)}${btn('Editar sessão', 'edit-session', session.id)}
     ${btn('Excluir sessão', 'delete-session', session.id, 'danger')}</div>`, () => $('#dialog').close(), 'Fechar');
   $('#dialog form button[type="button"][data-action="close-dialog"]').hidden = true;
 }
@@ -745,6 +860,9 @@ function editSession(session) {
     if (blocksTime(updated) && data.sessions.some(s => s.id !== session.id && blocksTime(s) && overlaps(s, updated))) {
       throw new Error('O horário se sobrepõe a outra sessão.');
     }
+    if (status === 'agendada' && (session.at !== updated.at || session.status !== status) && outsideDateHours(updated)) {
+      throw new Error('O horário está fora da disponibilidade definida para a data.');
+    }
     updateSession(session, updated, 'Sessão atualizada.');
   });
 }
@@ -810,16 +928,27 @@ function handle(action, value) {
   const entry = entries.find(c => c.id === value);
   const session = data.sessions.find(s => s.id === value);
   switch (action) {
+    case 'agenda-mode':
+      agendaMode = value;
+      if (value === 'today') week = weekStart(today());
+      render();
+      document.querySelector('[data-action="agenda-mode"][aria-pressed="true"]').focus();
+      break;
     case 'week':
       week = Number(value) ? shift(week, Number(value)) : weekStart(today());
       render();
       $('#title').focus();
       break;
     case 'hours': hoursDialog(); break;
+    case 'date-hours': dateHoursDialog(value); break;
+    case 'remove-date-hours':
+      change(next => { next.dateHours = next.dateHours.filter(item => item.date !== value); }, 'Horários semanais restaurados.');
+      break;
     case 'google': googleDialog(); break;
     case 'book': bookDialog(value); break;
     case 'rebook': bookDialog(session.at, session); break;
     case 'patient': patientDialog(patient(value)); break;
+    case 'patient-history': patientHistory(patient(value), entries); break;
     case 'delete-patient': {
       const sessions = new Set(data.sessions.filter(s => s.patientId === value).map(s => s.id));
       const relatedCharge = chargeId => sessions.has(chargeId) || chargeId.startsWith(value + '-ciclo-');
@@ -878,6 +1007,7 @@ function handle(action, value) {
       const upcoming = data.sessions.filter(s => s.patientId === value && s.status === 'agendada' && s.at >= localStamp())
         .sort((a, b) => a.at.localeCompare(b.at))[0];
       week = weekStart(upcoming?.at.slice(0, 10) ?? today());
+      if (agendaMode === 'today' && upcoming && !upcoming.at.startsWith(today())) agendaMode = 'grid';
       navigate('agenda');
       if (upcoming) sessionDialog(upcoming);
       break;

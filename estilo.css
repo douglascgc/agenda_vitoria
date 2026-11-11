@@ -132,3 +132,9 @@ body.signed-out > aside, body.signed-out > main { display: none; }
 .totals { display: grid; grid-template-columns: 1fr auto; gap: .45rem .6rem; margin: .4rem 0 0; }
 .totals dd { margin: 0; text-align: end; font-weight: 650; }
 .google-review small { display: block; margin-top: .35rem; }
+.agenda-modes { display: flex; flex-wrap: wrap; gap: .35rem; }
+.agenda-modes button[aria-pressed="true"] { background: #dbe9d6; border-color: #7e9a77; font-weight: 650; }
+.agenda-list-day { margin-bottom: 1.15rem; }
+.agenda-list-item .actions { margin: 0; }
+.text-action { padding: 0; border: 0; background: transparent; font-weight: 650; text-decoration: underline; text-underline-offset: .15em; }
+.availability-warning { display: block; width: fit-content; margin-top: .35rem; padding: .15rem .4rem; border-radius: .35rem; background: #f7e2d4; color: #703d23; font-weight: 650; }

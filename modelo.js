@@ -116,6 +116,8 @@
         (s.googleRef === undefined || typeof s.googleRef === 'string') &&
         ['agendada', 'realizada', 'perdida', 'cancelada', 'decidir', 'remarcar'].includes(s.status)) &&
       list(value.hours, h => Number.isInteger(h.day) && h.day >= 0 && h.day < 7 && time(h.start) && time(h.end)) &&
+      list(value.dateHours ?? [], h => date(h.date) && typeof h.closed === 'boolean' &&
+        (h.closed || time(h.start) && time(h.end) && h.start < h.end)) &&
       list(value.payments, p => typeof p.chargeId === 'string' && mode(p.mode) && amount(p.amount) && date(p.date)) &&
       list(value.cycles ?? [], c => id(c.patientId) && Number.isInteger(c.number) && c.number > 0 &&
         c.number <= value.sessions.length + 1 && amount(c.amount) && (!c.due || date(c.due))) &&
@@ -125,8 +127,8 @@
       Number.isInteger(value.conexaDay) && value.conexaDay >= 1 && value.conexaDay <= 15)) {
       throw new Error('O arquivo não é uma cópia válida da Agenda Vitória.');
     }
-    const { patients, sessions, hours, payments, reminders, conexaDay, cycles, absences } = value;
-    return { patients, sessions, hours, payments, reminders, conexaDay, cycles, absences };
+    const { patients, sessions, hours, dateHours, payments, reminders, conexaDay, cycles, absences } = value;
+    return { patients, sessions, hours, dateHours, payments, reminders, conexaDay, cycles, absences };
   }
 
   const model = { newData, modes, sum, cycleSlots, charges, addPayment, preservePayments, reminders, validateBackup };
