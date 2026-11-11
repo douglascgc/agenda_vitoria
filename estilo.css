@@ -121,3 +121,14 @@ body.signed-out > aside, body.signed-out > main { display: none; }
 .quick-guide summary:focus-visible { outline: 2px solid #386348; outline-offset: 3px; }
 .quick-guide ol { margin: .6rem 0 .1rem; padding-inline-start: 1.35rem; max-width: 75ch; line-height: 1.55; }
 .quick-guide li + li { margin-top: .35rem; }
+
+.queue-link { width: 100%; padding: .55rem .65rem; border: 1px solid #9eb697; border-radius: .5rem; background: #e9f2e6; text-align: start; font-weight: 650; }
+.pending-group { margin: 0 0 1.5rem; }
+.pending-group h2 { display: flex; align-items: center; gap: .55rem; }
+.pending-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); gap: .65rem; margin-top: .65rem; }
+.pending-grid .card { margin: 0; background: #fffdf8; border-color: #d5ddd0; }
+.month-close { margin-bottom: 1.25rem; }
+.month-close label { width: fit-content; }
+.totals { display: grid; grid-template-columns: 1fr auto; gap: .45rem .6rem; margin: .4rem 0 0; }
+.totals dd { margin: 0; text-align: end; font-weight: 650; }
+.google-review small { display: block; margin-top: .35rem; }

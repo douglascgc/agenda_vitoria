@@ -21,7 +21,7 @@ const statusLabel = {
   agendada: 'Agendada', realizada: 'Realizada', perdida: 'Perdida',
   cancelada: 'Cancelada', decidir: 'Falta · decidir', remarcar: 'A remarcar'
 };
-const nav = { agenda: 'Agenda da semana', pacientes: 'Pacientes', financeiro: 'Financeiro', indicadores: 'Indicadores', conta: 'Conta e backups' };
+const nav = { agenda: 'Agenda da semana', pendencias: 'Pendências', pacientes: 'Pacientes', financeiro: 'Financeiro', indicadores: 'Indicadores', conta: 'Conta e backups' };
 const weekdayNames = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 const id = () => crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint32Array(4))).join('-');
 const btn = (label, action, value = '', variant = '') =>
@@ -39,6 +39,7 @@ let data;
 let view = 'agenda';
 let week = weekStart(today());
 let month = today().slice(0, 7);
+let financeMonth = month;
 const cloudMode = location.protocol !== 'file:';
 let revision = 0;
 let saving = false;
@@ -146,23 +147,38 @@ function dialog(title, fields, submit, saveLabel = 'Salvar') {
   if (!box.open) box.showModal();
 }
 
-function renderAlerts(entries) {
-  const items = reminders(data, entries, today());
+function pendingItems(entries) {
+  const now = Date.parse(localStamp() + 'Z');
+  const unrecorded = data.sessions.filter(s => s.status === 'agendada' &&
+    Date.parse(s.at + 'Z') + (s.duration ?? 60) * 60000 <= now)
+    .sort((a, b) => a.at.localeCompare(b.at));
+  return [...unrecorded.map(session => ({ type: 'session', session })), ...reminders(data, entries, today())];
+}
+
+function renderAlerts(items) {
   const counter = $('#alert-count');
   counter.hidden = items.length === 0;
   counter.textContent = items.length;
   counter.setAttribute('aria-label', items.length + ' pendentes');
-  $('#alert-list').innerHTML = items.map(item => {
+  $('#alert-list').innerHTML = items.slice(0, 4).map(pendingCard).join('') || '<p>Nenhum alerta pendente.</p>';
+}
+
+function pendingCard(item) {
     if (item.type === 'cycle') return `<article class="card"><h3>Ciclo perto do fim</h3>
-      <p>${esc(item.patient.name)} · Resta 1 sessão</p><p>Próximo vencimento: ${dayLabel(item.next)}</p></article>`;
+      <p>${esc(item.patient.name)} · Resta 1 sessão</p><p>Próximo vencimento: ${dayLabel(item.next)}</p>
+      <div class="actions">${btn('Ver agenda', 'patient-agenda', item.patient.id)}</div></article>`;
     if (item.type === 'conexa') return `<article class="card"><h3>Conferir repasse Conexa</h3>
       <p>${monthLabel(item.month)} · ${money(item.balance)} em aberto</p>
-      <div class="actions">${btn('Ver repasse', 'finance')}</div></article>`;
-    if (item.type === 'session') return `<article class="card"><h3>${statusLabel[item.session.status]}</h3>
-      <p>${patientName(item.session.patientId)} · ${dayLabel(item.session.at.slice(0, 10))}</p>
-      <div class="actions">${btn('Resolver', 'session', item.session.id)}</div></article>`;
+      <div class="actions">${btn('Conciliar sessões', 'reconcile', item.month)}</div></article>`;
+    if (item.type === 'session') {
+      const missing = item.session.status === 'agendada';
+      return `<article class="card"><h3>${missing ? 'Sessão sem registro' : statusLabel[item.session.status]}</h3>
+      <p>${patientName(item.session.patientId)} · ${appointmentTime(item.session)}</p>
+      <div class="actions">${btn(missing ? 'Registrar atendimento' : 'Resolver', 'session', item.session.id, 'primary')}</div></article>`;
+    }
     const { charge } = item;
-    return `<article class="card"><h3>Confirme o pagamento</h3>
+    const due = data.reminders[charge.id]?.date || charge.due;
+    return `<article class="card"><h3>${due < today() ? 'Cobrança vencida' : 'Pagamento previsto para hoje'}</h3>
       <p>${patientName(charge.patientId)} · ${money(charge.balance)}</p>
       <p>Vencimento: ${dayLabel(data.reminders[charge.id]?.date || charge.due)}</p>
       <div class="actions">${btn('Sim, recebi', 'pay', charge.id, 'primary')}</div>
@@ -170,7 +186,17 @@ function renderAlerts(entries) {
       ${btn('Prorrogar cobrança', 'defer', charge.id)}${btn('Suspender aviso', 'pause', charge.id)}
       ${patient(charge.patientId)?.active ? btn('Encerrar acompanhamento', 'end', charge.patientId) : ''}
       </div></details></article>`;
-  }).join('') || '<p>Nenhum alerta pendente.</p>';
+}
+
+function pendingPage(items) {
+  const groups = [
+    ['Atendimentos', ['session']], ['Financeiro', ['payment', 'conexa']], ['Próximos ciclos', ['cycle']]
+  ];
+  return groups.map(([title, types]) => {
+    const group = items.filter(item => types.includes(item.type));
+    return group.length ? `<section class="pending-group"><h2>${title} <span class="badge">${group.length}</span></h2>
+      <div class="pending-grid">${group.map(pendingCard).join('')}</div></section>` : '';
+  }).join('') || '<p class="record">Nenhuma pendência no momento.</p>';
 }
 
 function slotStarts(day) {
@@ -241,7 +267,20 @@ function finance(entries) {
     Number(a.balance === 0) - Number(b.balance === 0) || (a.due || '9999').localeCompare(b.due || '9999'));
   const conexa = entries.filter(e => e.mode === 'conexa');
   const months = [...new Set(conexa.map(e => e.month))].sort().reverse();
-  return `<div class="toolbar">${btn('Dia de conferência Conexa', 'conexa-day')}</div>
+  const summary = (label, charges) => {
+    const batch = charges.filter(entry => entry.month === financeMonth);
+    const expected = sum(batch, entry => entry.amount);
+    const received = sum(batch, entry => entry.paid);
+    return `<article class="metric"><h3>${label}</h3><dl class="totals">
+      <dt>Previsto</dt><dd>${money(expected)}</dd>
+      <dt>Recebido dessas cobranças</dt><dd>${money(received)}</dd>
+      <dt>Saldo em aberto</dt><dd>${money(expected - received)}</dd></dl></article>`;
+  };
+  return `<section class="month-close"><h2>Conferência mensal</h2>
+    <label>Mês das cobranças e dos atendimentos <input type="month" id="finance-month" value="${financeMonth}"></label>
+    <div class="metrics">${summary('Particulares', particular)}${summary('Conexa', conexa)}</div>
+    <p class="hint">O total recebido inclui pagamentos vinculados a esse mês, mesmo quando entraram depois.</p></section>
+    <div class="toolbar">${btn('Dia de conferência Conexa', 'conexa-day')}</div>
     <h2>Cobranças particulares</h2>${particular.map(chargeRow).join('') || '<p>Nenhuma cobrança registrada.</p>'}
     <h2 class="section-title">Repasses Conexa</h2>${months.map(value => {
       const batch = conexa.filter(e => e.month === value);
@@ -332,17 +371,19 @@ function indicators(entries) {
 
 function render() {
   const entries = charges(data);
+  const items = pendingItems(entries);
   $('#title').textContent = nav[view];
   $('#title').tabIndex = -1;
   $('#subtitle').textContent = view === 'agenda' ? dayLabel(week) + ' a ' + dayLabel(shift(week, 6)) : '';
-  for (const button of document.querySelectorAll('[data-view]')) {
+  for (const button of document.querySelectorAll('nav [data-view]')) {
     const active = button.dataset.view === view;
     button.classList.toggle('selected', active);
     if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
-  $('#content').innerHTML = { agenda: schedule, pacientes: patientsPage, financeiro: finance, indicadores: indicators, conta: accountPage }[view](entries);
-  renderAlerts(entries);
+  $('#content').innerHTML = view === 'pendencias' ? pendingPage(items)
+    : { agenda: schedule, pacientes: patientsPage, financeiro: finance, indicadores: indicators, conta: accountPage }[view](entries);
+  renderAlerts(items);
 }
 
 function accountPage() {
@@ -437,6 +478,7 @@ const localStamp = () => {
   return today() + 'T' + now.toTimeString().slice(0, 5);
 };
 const blocksTime = session => ['agendada', 'realizada', 'perdida', 'decidir'].includes(session.status);
+const appointmentTime = session => dayLabel(session.at.slice(0, 10)) + ' às ' + session.at.slice(11, 16);
 function overlaps(a, b) {
   const first = Date.parse(a.at + 'Z');
   const second = Date.parse(b.at + 'Z');
@@ -494,8 +536,10 @@ function reviewGoogle(events) {
   const rows = candidates.map((event, index) => {
     const existing = known.get(event.ref);
     const choices = existing ? people.filter(p => p.id === existing.patientId) : people;
-    return `<label class="record"><span><strong>${esc(event.title)}</strong> · ${dayLabel(event.at.slice(0, 10))}
-      às ${event.at.slice(11)} · ${event.duration} min</span>
+    return `<label class="record google-review"><span><strong>${esc(event.title)}</strong>
+      <span class="badge">${existing ? 'Remarcação' : 'Novo evento'}</span>
+      ${existing ? `<small>Na Agenda: ${appointmentTime(existing)} · ${existing.duration ?? 60} min</small>` : ''}
+      <small>No Google: ${appointmentTime(event)} · ${event.duration} min</small></span>
       <select name="event-${index}">${option('', 'Ignorar evento')}
       ${choices.map(p => option(p.id, existing ? 'Atualizar horário de ' + p.name : 'Importar para ' + p.name)).join('')}
       </select></label>`;
@@ -830,6 +874,14 @@ function handle(action, value) {
         next => { next.payments.splice(Number(value), 1); }, 'Recebimento excluído.');
       break;
     case 'finance': navigate('financeiro'); break;
+    case 'patient-agenda': {
+      const upcoming = data.sessions.filter(s => s.patientId === value && s.status === 'agendada' && s.at >= localStamp())
+        .sort((a, b) => a.at.localeCompare(b.at))[0];
+      week = weekStart(upcoming?.at.slice(0, 10) ?? today());
+      navigate('agenda');
+      if (upcoming) sessionDialog(upcoming);
+      break;
+    }
     case 'reconcile': reconcileDialog(value, entries); break;
     case 'defer':
       dialog('Prorrogar cobrança', `<p>${patientName(entry.patientId)} · ${money(entry.balance)}</p>
@@ -905,6 +957,11 @@ document.addEventListener('keydown', event => {
   }
 });
 document.addEventListener('change', event => {
+  if (event.target.id === 'finance-month' && event.target.value) {
+    financeMonth = event.target.value;
+    render();
+    $('#finance-month').focus();
+  }
   if (event.target.id === 'report-month' && event.target.value) {
     month = event.target.value;
     render();
@@ -932,7 +989,8 @@ window.addEventListener('focus', async () => {
     }
   } else if (!$('#dialog').open) {
     reload();
-    renderAlerts(charges(data));
+    if (view === 'pendencias') render();
+    else renderAlerts(pendingItems(charges(data)));
   }
 });
 
